@@ -10,10 +10,10 @@
 //! unless it says linear.
 //!
 //! The surface is over B6's 25 public items on purpose: they are the fields and constructors of the
-//! frame's value types (`Drawable`, `Polyline`, `ShadingStyle`, `Grid`, `ContactShadow`,
-//! `ContactShadows`, `Lighting`, `PointLight`) beside `SceneFrame`'s own builders, and a frame is
-//! assembled from all of them at once — splitting them would put one description in eight modules a
-//! reader has to join back.
+//! frame's value types (`Drawable`, `Polyline`, `ProductEnvelope`, `ShadingStyle`, `Grid`,
+//! `ContactShadow`, `ContactShadows`, `Lighting`, `PointLight`) beside `SceneFrame`'s own builders,
+//! and a frame is assembled from all of them at once — splitting them would put one description in
+//! nine modules a reader has to join back.
 //!
 //! Changes when: what a frame carries, or how a frame describes a drawable, a shadow or a light,
 //! changes.
@@ -32,7 +32,7 @@ use std::sync::Arc;
 use furnicraft_geom::{DMat4, DQuat, DVec3, MeshData};
 use furnicraft_model::Id;
 
-use crate::ray::{ray_hit_drawable, ray_hit_polyline};
+use crate::ray::{ray_hit_drawable, ray_hit_polyline, ray_hit_product_envelope};
 
 pub mod camera;
 pub mod ray;
@@ -163,11 +163,12 @@ impl Default for Grid {
 
 /// The viewport's own colours: what the active theme variant paints the frame with.
 ///
-/// These are the frame's non-material colours — the clear colour, the floor grid and the ink of an
-/// unlit line that leaves its colour to the frame (see [`Polyline::in_ink`]). A variant never
-/// touches a drawable's material colour, so the furniture keeps its own colours in both themes.
-/// The renderer derives the edge ink from [`SceneColors::background`], so a light workspace draws
-/// dark form edges without a second switch.
+/// These are the frame's non-material colours — the clear colour, the floor grid, the ink of an
+/// unlit line that leaves its colour to the frame (see [`Polyline::in_ink`]) and the two inks of a
+/// product envelope (see [`ProductEnvelopeState`]). A variant never touches a drawable's material
+/// colour, so the furniture keeps its own colours in both themes. The renderer derives the edge ink
+/// from [`SceneColors::background`], so a light workspace draws dark form edges without a second
+/// switch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneColors {
     /// The clear colour, in gamma space.
@@ -176,16 +177,30 @@ pub struct SceneColors {
     pub grid: Grid,
     /// The colour of an unlit line that names no colour of its own, in gamma space.
     pub line_ink: [f32; 4],
+    /// The ink of the open product's envelope, in gamma space.
+    pub product_envelope_active: [f32; 4],
+    /// The ink of a closed, empty product's envelope, in gamma space.
+    pub product_envelope_inactive: [f32; 4],
 }
 
 impl SceneColors {
     /// The dark variant the editor has drawn with since U38.
-    pub const DARK: Self =
-        Self { background: [0.10, 0.11, 0.13, 1.0], grid: Grid::DARK, line_ink: [0.95, 0.72, 0.20, 1.0] };
+    pub const DARK: Self = Self {
+        background: [0.10, 0.11, 0.13, 1.0],
+        grid: Grid::DARK,
+        line_ink: [0.95, 0.72, 0.20, 1.0],
+        product_envelope_active: [0.88, 0.64, 0.29, 1.0],
+        product_envelope_inactive: [0.50, 0.54, 0.60, 1.0],
+    };
 
     /// The light variant: the same scene on paper instead of slate.
-    pub const LIGHT: Self =
-        Self { background: [0.87, 0.88, 0.90, 1.0], grid: Grid::LIGHT, line_ink: [0.70, 0.44, 0.03, 1.0] };
+    pub const LIGHT: Self = Self {
+        background: [0.87, 0.88, 0.90, 1.0],
+        grid: Grid::LIGHT,
+        line_ink: [0.70, 0.44, 0.03, 1.0],
+        product_envelope_active: [0.55, 0.33, 0.05, 1.0],
+        product_envelope_inactive: [0.44, 0.47, 0.51, 1.0],
+    };
 }
 
 impl Default for SceneColors {
@@ -410,6 +425,61 @@ impl Polyline {
     }
 }
 
+/// What a product envelope says about its product: the three states ADR 0100 draws differently.
+///
+/// The state is session data, never document data: opening and closing a product is a view
+/// operation (ADR 0098), so the scene carries the answer and the file never does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProductEnvelopeState {
+    /// The product is the one open piece: its lines take the active ink.
+    Open,
+    /// The product is closed and draws nothing yet: its lines take the inactive ink.
+    ClosedEmpty,
+    /// The product is closed and already speaks for itself: no lines at all.
+    ClosedWithParts,
+}
+
+impl ProductEnvelopeState {
+    /// Whether the state draws the envelope.
+    pub const fn draws(self) -> bool {
+        !matches!(self, Self::ClosedWithParts)
+    }
+}
+
+/// One product's authored envelope in world space: the box it reserves, never a body.
+///
+/// The document stores three sides in the product's own frame (ADR 0097), so the scene carries them
+/// with the rigid local-to-world transform instead of eight world corners: the renderer draws the
+/// twelve edges of that box and picking casts the ray into the product frame. The envelope is
+/// picked even when its lines are hidden, which is how a closed product with parts stays reachable
+/// (ADR 0100).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProductEnvelope {
+    /// The product container this box belongs to.
+    pub id: Id,
+    /// Width, depth and height in the product's own frame, in millimetres.
+    pub size: DVec3,
+    /// Rigid local-to-world transform of the product.
+    pub world_transform: DMat4,
+    /// Open, closed and empty, or closed with parts.
+    pub state: ProductEnvelopeState,
+}
+
+impl ProductEnvelope {
+    /// The volume of the box in cubic millimetres, or `None` when the box is not usable.
+    ///
+    /// Picking uses it to prefer the innermost product when several envelopes contain the point:
+    /// the tightest box is the one the maker means. A non-finite or non-positive side has no
+    /// volume, so a hostile frame never wins a pick.
+    fn volume(&self) -> Option<f64> {
+        if !self.size.is_finite() || self.size.min_element() <= 0.0 {
+            return None;
+        }
+        let volume = self.size.x * self.size.y * self.size.z;
+        (volume.is_finite() && volume > 0.0).then_some(volume)
+    }
+}
+
 /// Everything needed to draw and light one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneFrame {
@@ -433,10 +503,16 @@ pub struct SceneFrame {
     pub background: [f32; 4],
     /// The ink of a line chain that names no colour of its own, in gamma space.
     pub line_ink: [f32; 4],
+    /// The ink of an open product's envelope, in gamma space.
+    pub product_envelope_active: [f32; 4],
+    /// The ink of a closed, empty product's envelope, in gamma space.
+    pub product_envelope_inactive: [f32; 4],
     /// Shaded meshes in world space.
     pub drawables: Vec<Drawable>,
     /// Unlit line chains in world space.
     pub polylines: Vec<Polyline>,
+    /// The authored envelopes of the products, drawn as dashes and picked as boxes.
+    pub product_envelopes: Vec<ProductEnvelope>,
 }
 
 impl Default for SceneFrame {
@@ -452,8 +528,11 @@ impl Default for SceneFrame {
             lighting: Lighting::default(),
             background: colors.background,
             line_ink: colors.line_ink,
+            product_envelope_active: colors.product_envelope_active,
+            product_envelope_inactive: colors.product_envelope_inactive,
             drawables: Vec::new(),
             polylines: Vec::new(),
+            product_envelopes: Vec::new(),
         }
     }
 }
@@ -472,6 +551,8 @@ impl SceneFrame {
         self.grid.axis_x_color = colors.grid.axis_x_color;
         self.grid.axis_y_color = colors.grid.axis_y_color;
         self.line_ink = colors.line_ink;
+        self.product_envelope_active = colors.product_envelope_active;
+        self.product_envelope_inactive = colors.product_envelope_inactive;
     }
 
     /// Adds a drawable to the frame.
@@ -489,6 +570,11 @@ impl SceneFrame {
         self.shadows.push(shadow);
     }
 
+    /// Adds a product envelope to the frame.
+    pub fn push_product_envelope(&mut self, envelope: ProductEnvelope) {
+        self.product_envelopes.push(envelope);
+    }
+
     /// The frame's drawables.
     pub fn drawables(&self) -> &[Drawable] {
         &self.drawables
@@ -504,6 +590,11 @@ impl SceneFrame {
         &self.polylines
     }
 
+    /// The frame's product envelopes.
+    pub fn product_envelopes(&self) -> &[ProductEnvelope] {
+        &self.product_envelopes
+    }
+
     /// The document id of the nearest drawable or line chain hit by `ray`.
     ///
     /// A drawable is hit when one of its triangles crosses the ray. A line chain has no thickness,
@@ -512,7 +603,14 @@ impl SceneFrame {
     /// non-positive or non-finite one accepts only an exact crossing. A path wins a tie with a
     /// solid it lies on, so a contour drawn on a face stays selectable.
     ///
-    /// Malformed vertices, indices and world transforms are skipped. Picking returns a document
+    /// A product envelope is picked by its whole box, not only by its lines: a click on empty space
+    /// inside the piece selects the piece. It loses to every solid and every line chain, so a click
+    /// through the box still reaches the panel behind it, and the tightest box wins when several
+    /// envelopes contain the point, which is how a product standing in the void of another stays
+    /// reachable (ADR 0100). Two equally tight boxes tie to the nearer one; a closed product with
+    /// parts draws no lines but is still picked by its interior.
+    ///
+    /// Malformed vertices, indices, transforms and envelopes are skipped. Picking returns a document
     /// id, never a mesh index or a pointer: the caller can select it or send it to a command.
     pub fn pick(&self, ray: Ray, viewport_height: f64) -> Option<Id> {
         let mut nearest: Option<(f64, Id)> = None;
@@ -532,7 +630,28 @@ impl SceneFrame {
                 nearest = Some((distance, polyline.id));
             }
         }
-        nearest.map(|(_, id)| id)
+        if let Some((_, id)) = nearest {
+            return Some(id);
+        }
+        // Only an unoccluded click reaches an envelope, and then the innermost product wins: the
+        // smallest box containing the point is the piece the maker is pointing at. Two equally
+        // tight boxes tie to the nearer one, so the answer never depends on tree order.
+        let mut innermost: Option<(f64, f64, Id)> = None;
+        for envelope in &self.product_envelopes {
+            let Some(volume) = envelope.volume() else {
+                continue;
+            };
+            let Some(entry) = ray_hit_product_envelope(ray, envelope) else {
+                continue;
+            };
+            let nearer = innermost.is_none_or(|(best_volume, best_entry, _)| {
+                volume < best_volume || (volume == best_volume && entry < best_entry)
+            });
+            if nearer {
+                innermost = Some((volume, entry, envelope.id));
+            }
+        }
+        innermost.map(|(_, _, id)| id)
     }
 
     /// A copy of the frame with every selected drawable and line chain highlighted for picking
@@ -582,6 +701,11 @@ impl SceneFrame {
                 polyline.world_transform = translation * polyline.world_transform;
             }
         }
+        for envelope in &mut frame.product_envelopes {
+            if ids.contains(&envelope.id) {
+                envelope.world_transform = translation * envelope.world_transform;
+            }
+        }
         for shadow in &mut frame.shadows {
             if ids.contains(&shadow.id) {
                 // A shadow stays on the ground plane: only its footprint slides with the object.
@@ -612,6 +736,11 @@ impl SceneFrame {
         for polyline in &mut frame.polylines {
             if ids.contains(&polyline.id) {
                 polyline.world_transform = about_pivot * polyline.world_transform;
+            }
+        }
+        for envelope in &mut frame.product_envelopes {
+            if ids.contains(&envelope.id) {
+                envelope.world_transform = about_pivot * envelope.world_transform;
             }
         }
         for shadow in &mut frame.shadows {
@@ -1494,6 +1623,164 @@ mod tests {
         let mut frame = SceneFrame::default();
         frame.push(Drawable::new(id, mesh, DMat4::IDENTITY, [1.0; 4]));
         let ray = Ray::new(DVec3::new(0.0, 0.0, 1.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(ray, 600.0), None);
+    }
+
+    fn envelope(id: u64, size: DVec3, translation: DVec3, state: ProductEnvelopeState) -> ProductEnvelope {
+        ProductEnvelope {
+            id: Id::new(id).expect("id"),
+            size,
+            world_transform: DMat4::from_translation(translation),
+            state,
+        }
+    }
+
+    #[test]
+    fn a_product_envelope_is_drawn_in_the_three_states_of_the_decision() {
+        assert!(ProductEnvelopeState::Open.draws(), "an open product always shows its box");
+        assert!(ProductEnvelopeState::ClosedEmpty.draws(), "a closed empty piece is small and unmistakable");
+        assert!(!ProductEnvelopeState::ClosedWithParts.draws(), "a piece with parts speaks for itself");
+
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(1, DVec3::splat(100.0), DVec3::ZERO, ProductEnvelopeState::Open));
+        assert_eq!(frame.product_envelopes().len(), 1);
+        assert!(frame.drawables().is_empty() && frame.polylines().is_empty(), "a box is not a body");
+        assert_eq!(frame.product_envelope_active, SceneColors::DARK.product_envelope_active);
+        frame.apply_colors(SceneColors::LIGHT);
+        assert_eq!(frame.product_envelope_active, SceneColors::LIGHT.product_envelope_active);
+        assert_eq!(frame.product_envelope_inactive, SceneColors::LIGHT.product_envelope_inactive);
+    }
+
+    #[test]
+    fn the_two_envelope_inks_stay_visible_on_their_background() {
+        let dark = SceneColors::DARK;
+        let light = SceneColors::LIGHT;
+        assert_ne!(dark.product_envelope_active, dark.product_envelope_inactive, "open and closed must differ");
+        assert!(
+            (luminance(dark.product_envelope_active) - luminance(dark.product_envelope_inactive)).abs() > 0.1,
+            "the active box is visibly not the inactive one"
+        );
+        assert!(luminance(dark.product_envelope_inactive) > luminance(dark.background));
+        assert!(luminance(light.product_envelope_inactive) < luminance(light.background));
+        assert!((luminance(light.product_envelope_active) - luminance(light.product_envelope_inactive)).abs() > 0.1);
+    }
+
+    #[test]
+    fn a_product_envelope_is_picked_by_its_whole_box() {
+        let id = Id::new(11).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(
+            11,
+            DVec3::new(100.0, 100.0, 100.0),
+            DVec3::ZERO,
+            ProductEnvelopeState::Open,
+        ));
+
+        for point in [DVec3::new(50.0, 50.0, 50.0), DVec3::new(1.0, 1.0, 99.0), DVec3::new(50.0, 50.0, 200.0)] {
+            let ray = Ray::new(point + DVec3::Z * 1000.0, -DVec3::Z).expect("ray");
+            assert_eq!(frame.pick(ray, 600.0), Some(id), "a click on empty space inside the piece");
+        }
+
+        let outside = Ray::new(DVec3::new(150.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(outside, 600.0), None);
+        let beside = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::X).expect("ray");
+        assert_eq!(frame.pick(beside, 600.0), None, "a ray may miss the box entirely");
+    }
+
+    #[test]
+    fn a_solid_wins_over_the_envelope_around_it() {
+        let product = Id::new(12).expect("id");
+        let panel = Id::new(13).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(
+            12,
+            DVec3::new(100.0, 100.0, 100.0),
+            DVec3::ZERO,
+            ProductEnvelopeState::Open,
+        ));
+        frame.push(Drawable::new(panel, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let on_panel = Ray::new(DVec3::new(0.5, 0.5, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(on_panel, 600.0), Some(panel), "a panel under the cursor is the panel");
+        let empty = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(empty, 600.0), Some(product), "the frame is picked only where no solid is");
+    }
+
+    #[test]
+    fn the_innermost_product_wins_when_boxes_nest() {
+        let outer = Id::new(21).expect("id");
+        let inner = Id::new(22).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(21, DVec3::splat(1000.0), DVec3::ZERO, ProductEnvelopeState::ClosedEmpty));
+        frame.push_product_envelope(envelope(
+            22,
+            DVec3::splat(200.0),
+            DVec3::new(300.0, 300.0, 0.0),
+            ProductEnvelopeState::ClosedWithParts,
+        ));
+
+        let inside_both = Ray::new(DVec3::new(350.0, 350.0, 2000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(inside_both, 600.0), Some(inner), "the tightest box is the piece meant");
+        let outer_only = Ray::new(DVec3::new(900.0, 900.0, 2000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(outer_only, 600.0), Some(outer));
+        assert_ne!(inner, outer);
+    }
+
+    #[test]
+    fn two_equally_tight_envelopes_tie_to_the_nearer_one() {
+        let near = Id::new(51).expect("id");
+        let far = Id::new(52).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(51, DVec3::splat(100.0), DVec3::ZERO, ProductEnvelopeState::Open));
+        frame.push_product_envelope(envelope(
+            52,
+            DVec3::splat(100.0),
+            DVec3::new(0.0, 0.0, -500.0),
+            ProductEnvelopeState::Open,
+        ));
+        let ray = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(ray, 600.0), Some(near), "the nearer box is the one the click points at");
+        let behind = Ray::new(DVec3::new(50.0, 50.0, -1000.0), DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(behind, 600.0), Some(far), "from below, the same box is the nearer one");
+    }
+
+    #[test]
+    fn a_hidden_envelope_stays_pickable_and_a_rotated_one_is_tested_in_its_own_frame() {
+        let id = Id::new(31).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(
+            31,
+            DVec3::splat(100.0),
+            DVec3::ZERO,
+            ProductEnvelopeState::ClosedWithParts,
+        ));
+        let hidden = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(hidden, 600.0), Some(id), "a closed piece with parts is still selected");
+
+        let mut frame = SceneFrame::default();
+        let mut turned = envelope(31, DVec3::splat(100.0), DVec3::ZERO, ProductEnvelopeState::Open);
+        turned.world_transform = DMat4::from_quat(DQuat::from_rotation_z(FRAC_PI_2 / 2.0));
+        frame.push_product_envelope(turned);
+        let inside = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(inside, 600.0), Some(id), "the point is inside the turned box");
+        let outside = Ray::new(DVec3::new(70.0, 0.0, 1000.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(outside, 600.0), None, "inside the world bounds but not inside the box");
+    }
+
+    #[test]
+    fn a_malformed_envelope_is_skipped_instead_of_panicking() {
+        let mut frame = SceneFrame::default();
+        frame.push_product_envelope(envelope(41, DVec3::ZERO, DVec3::ZERO, ProductEnvelopeState::Open));
+        frame.push_product_envelope(envelope(
+            42,
+            DVec3::new(f64::NAN, 100.0, 100.0),
+            DVec3::ZERO,
+            ProductEnvelopeState::Open,
+        ));
+        let mut no_inverse = envelope(43, DVec3::splat(100.0), DVec3::ZERO, ProductEnvelopeState::Open);
+        no_inverse.world_transform = DMat4::from_scale(DVec3::ZERO);
+        frame.push_product_envelope(no_inverse);
+        let ray = Ray::new(DVec3::new(50.0, 50.0, 1000.0), -DVec3::Z).expect("ray");
         assert_eq!(frame.pick(ray, 600.0), None);
     }
 

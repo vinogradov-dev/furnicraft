@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N2** the product frame is drawn as a dashed wireframe that never picks
+- `[~]` **N2** the product frame is drawn as a dashed wireframe that never picks
   Why: The envelope is useless if nobody can see it and nobody can click it: the owner
    described the frame as a dashed wireframe that is picked to select, open and move the piece,
    and the picture has to say whether the piece is open, closed and empty, or closed with

@@ -319,7 +319,7 @@ impl Document {
     ) -> Result<Self, String> {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default())?;
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None)?;
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
         let layout = Layout::new(fit, settings.viewport.opening_view, settings.viewport.style);
@@ -700,7 +700,7 @@ impl Document {
         self.editor.retain_flags(self.session.project());
         let visibility = self.editor.visibility_revision();
         let started = Instant::now();
-        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags())?;
+        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags(), None)?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
         self.layout.apply_frame_style(&mut scene);
@@ -2378,7 +2378,8 @@ mod tests {
         let session = crate::scene_build::sample_session().expect("the sample scene");
         let mut cache = EvaluationCache::new();
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         let revision = session.project().revision();
         let settings = ViewportSettings::default();
         let cluster = ViewCluster::default();

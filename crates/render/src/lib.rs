@@ -39,8 +39,8 @@ use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
 use self::geometry::{
-    EdgeSlice, edge_geometry, grid_vertices, mesh_centre, polyline_vertices, sanitize_color, shadow_geometry,
-    sort_back_to_front, stencil_slot, world_vertices,
+    EdgeSlice, edge_geometry, grid_vertices, mesh_centre, polyline_vertices, product_envelope_vertices, sanitize_color,
+    shadow_geometry, sort_back_to_front, stencil_slot, world_vertices,
 };
 use self::gpu::{GpuLineList, GpuMesh, GpuTriangles, clamp_size, line_list, triangle_list};
 use self::pipelines::{
@@ -127,6 +127,18 @@ pub enum RenderError {
         /// Position of the polyline in the frame.
         index: usize,
     },
+    /// A product envelope has a non-finite or non-positive size, or a malformed transform.
+    #[error("product envelope {index} is malformed")]
+    InvalidProductEnvelope {
+        /// Position of the envelope in the frame.
+        index: usize,
+    },
+    /// A product envelope's dashes exceed the renderer's vertex budget.
+    #[error("product envelope {index} has too many dashes")]
+    ProductEnvelopeTooLarge {
+        /// Position of the envelope in the frame.
+        index: usize,
+    },
     /// A contact shadow has a non-finite centre or a degenerate radii pair.
     #[error("contact shadow {index} is malformed")]
     InvalidShadow {
@@ -173,6 +185,9 @@ struct RenderTargets {
 impl RenderTargets {
     fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        // `COPY_SRC` in a test build is what lets an offscreen test read the picture back; the
+        // product never copies its colour target.
+        let copy = if cfg!(test) { wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::empty() };
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("FurniCraft viewport colour"),
             size,
@@ -180,7 +195,7 @@ impl RenderTargets {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: COLOR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | copy,
             view_formats: &[],
         });
         let depth = device.create_texture(&wgpu::TextureDescriptor {
@@ -286,6 +301,8 @@ pub struct ViewportRenderer {
     edge_slices: Vec<EdgeSlice>,
     grid: Option<GpuLineList>,
     polylines: Option<GpuLineList>,
+    /// The dashed boxes of the product envelopes, in one line buffer.
+    product_envelopes: Option<GpuLineList>,
     /// The contact shadows of every floor-standing object, in one triangle buffer.
     shadows: Option<GpuTriangles>,
     targets: RenderTargets,
@@ -396,6 +413,7 @@ impl ViewportRenderer {
             edge_slices: Vec::new(),
             grid: None,
             polylines: None,
+            product_envelopes: None,
             shadows: None,
             targets,
             size,
@@ -460,6 +478,15 @@ impl ViewportRenderer {
         let grid = line_list(device, "FurniCraft grid vertices", grid_vertices(&frame.grid))?;
         let polylines =
             line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines(), frame.line_ink)?)?;
+        let product_envelopes = line_list(
+            device,
+            "FurniCraft product envelope vertices",
+            product_envelope_vertices(
+                frame.product_envelopes(),
+                frame.product_envelope_active,
+                frame.product_envelope_inactive,
+            )?,
+        )?;
         let (edge_vertices, edge_slices) = edge_geometry(frame.drawables(), frame.all_edges, frame.background);
         let edges = line_list(device, "FurniCraft edge vertices", edge_vertices)?;
         let (shadow_vertices, shadow_indices) = shadow_geometry(frame.shadows())?;
@@ -473,6 +500,7 @@ impl ViewportRenderer {
         self.edge_slices = edge_slices;
         self.grid = grid;
         self.polylines = polylines;
+        self.product_envelopes = product_envelopes;
         self.shadows = shadows;
         Ok(())
     }
@@ -682,6 +710,14 @@ impl ViewportRenderer {
                     pass.draw(slice.first_vertex..slice.first_vertex + slice.vertex_count, 0..1);
                 }
             }
+
+            // The product envelopes draw last, after every solid pass: a box is reserved space,
+            // never a body, so its dashes write no depth and a panel in front still hides it.
+            if let Some(envelopes) = &self.product_envelopes {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_vertex_buffer(0, envelopes.vertex_buffer.slice(..));
+                pass.draw(0..envelopes.vertex_count, 0..1);
+            }
         }
         queue.submit(Some(encoder.finish()));
     }
@@ -753,7 +789,9 @@ mod tests {
     use crate::pipelines::{FACE_DEPTH_BIAS, MAX_STENCIL_OWNERS, STENCIL_MASK, face_depth_state, shadow_depth_state};
     use furnicraft_geom::{DMat4, MeshData};
     use furnicraft_model::Id;
-    use furnicraft_scene::{ContactShadow, Drawable, Grid, Polyline};
+    use furnicraft_scene::{
+        ContactShadow, Drawable, Grid, Polyline, ProductEnvelope, ProductEnvelopeState, SceneColors,
+    };
 
     fn triangle() -> MeshData {
         MeshData {
@@ -842,6 +880,79 @@ mod tests {
             polyline_vertices(&[bad_transform], SceneFrame::default().line_ink),
             Err(RenderError::InvalidPolyline { index: 0 })
         );
+    }
+
+    fn product_envelope(id: u64, size: DVec3, state: ProductEnvelopeState) -> ProductEnvelope {
+        ProductEnvelope { id: Id::new(id).expect("id"), size, world_transform: DMat4::IDENTITY, state }
+    }
+
+    #[test]
+    fn a_product_envelope_becomes_dashed_lines_in_its_state_colour() {
+        let active = SceneColors::DARK.product_envelope_active;
+        let inactive = SceneColors::DARK.product_envelope_inactive;
+        let open = product_envelope(1, DVec3::new(600.0, 400.0, 700.0), ProductEnvelopeState::Open);
+        let vertices = product_envelope_vertices(&[open], active, inactive).expect("a valid envelope");
+
+        // Twelve edges, each at most one dash cycle per 1/24 of the longest side.
+        assert_eq!(vertices.len() % 2, 0, "a line list is drawn in pairs");
+        assert!(vertices.len() > 12, "twelve edges need more than one dash each");
+        assert!(vertices.len() <= 12 * 2 * 26, "the dash cycle bounds the vertex count: {}", vertices.len());
+        assert!(vertices.iter().all(|vertex| vertex.color == active), "an open product draws in the active ink");
+
+        // The first edge runs along X from the zero corner; the first dash is painted and the next
+        // one starts after a gap, so the edge is visibly not a solid line.
+        assert_eq!(vertices[0].position, [0.0, 0.0, 0.0]);
+        let first_dash_end = vertices[1].position[0];
+        assert!(first_dash_end > 0.0 && first_dash_end < 600.0, "a dash stops before the corner");
+        let second_dash_start = vertices[2].position[0];
+        assert!(second_dash_start > first_dash_end, "a gap separates two dashes");
+        assert!(first_dash_end < 20.0, "the first dash is short: {first_dash_end}");
+
+        let closed = product_envelope(2, DVec3::splat(500.0), ProductEnvelopeState::ClosedEmpty);
+        let vertices = product_envelope_vertices(&[closed], active, inactive).expect("a valid envelope");
+        assert!(vertices.iter().all(|vertex| vertex.color == inactive), "a closed empty piece is inactive");
+        assert!(!vertices.is_empty());
+
+        let with_parts = product_envelope(3, DVec3::splat(500.0), ProductEnvelopeState::ClosedWithParts);
+        assert!(
+            product_envelope_vertices(&[with_parts], active, inactive).expect("a valid envelope").is_empty(),
+            "a closed piece with parts draws no lines"
+        );
+    }
+
+    #[test]
+    fn a_product_envelope_follows_its_transform_and_refuses_a_malformed_box() {
+        let active = SceneColors::DARK.product_envelope_active;
+        let inactive = SceneColors::DARK.product_envelope_inactive;
+        let mut moved = product_envelope(1, DVec3::splat(100.0), ProductEnvelopeState::Open);
+        moved.world_transform = DMat4::from_translation(DVec3::new(1000.0, 0.0, 0.0));
+        let vertices = product_envelope_vertices(&[moved], active, inactive).expect("a valid envelope");
+        assert!(vertices.iter().all(|vertex| vertex.position[0] >= 1000.0), "the box is drawn in world space");
+
+        let zero = product_envelope(2, DVec3::ZERO, ProductEnvelopeState::Open);
+        assert_eq!(
+            product_envelope_vertices(&[zero], active, inactive),
+            Err(RenderError::InvalidProductEnvelope { index: 0 })
+        );
+        let nan = product_envelope(3, DVec3::new(f64::NAN, 100.0, 100.0), ProductEnvelopeState::Open);
+        assert_eq!(
+            product_envelope_vertices(&[nan], active, inactive),
+            Err(RenderError::InvalidProductEnvelope { index: 0 })
+        );
+        assert!(
+            product_envelope_vertices(&[], active, inactive).is_ok_and(|vertices| vertices.is_empty()),
+            "no envelopes cost no vertices"
+        );
+    }
+
+    #[test]
+    fn a_closed_envelope_with_parts_is_not_sent_to_the_gpu() {
+        let active = SceneColors::LIGHT.product_envelope_active;
+        let inactive = SceneColors::LIGHT.product_envelope_inactive;
+        let hidden = product_envelope(1, DVec3::splat(100.0), ProductEnvelopeState::ClosedWithParts);
+        let open = product_envelope(2, DVec3::splat(100.0), ProductEnvelopeState::Open);
+        let vertices = product_envelope_vertices(&[hidden, open], active, inactive).expect("valid envelopes");
+        assert!(vertices.iter().all(|vertex| vertex.color == active), "only the open box is drawn");
     }
 
     #[test]
@@ -1152,6 +1263,128 @@ mod tests {
         assert_eq!(edge_color([0.10, 0.11, 0.13, 1.0]), EDGE_COLOR_LIGHT, "a dark viewport needs light edges");
         assert_eq!(edge_color([0.92, 0.92, 0.94, 1.0]), EDGE_COLOR_DARK, "a light viewport needs dark edges");
         assert_eq!(edge_color([f32::NAN; 4]), EDGE_COLOR_DARK, "a hostile colour falls back to the light ink");
+    }
+
+    /// A device and a queue with no surface behind them, or the sentence that says why there is
+    /// none; the ignored pixel test below uses it.
+    fn gpu_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    /// Copies the renderer's colour target back, top row first and tightly packed.
+    fn read_pixels(renderer: &ViewportRenderer, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+        let [width, height] = renderer.size();
+        let row_bytes = width.checked_mul(4).expect("a row fits");
+        let padded = row_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("FurniCraft product envelope shot pixels"),
+            size: u64::from(padded) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &renderer.targets._color_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("the shot waits for the map");
+        receiver.recv().expect("the shot is mapped").expect("the shot could be mapped");
+        let mut pixels = Vec::with_capacity((row_bytes * height) as usize);
+        {
+            let mapped = slice.get_mapped_range().expect("the shot is readable");
+            for line in 0..height as usize {
+                let start = line * padded as usize;
+                if let Some(chunk) = mapped.get(start..start + row_bytes as usize) {
+                    pixels.extend_from_slice(chunk);
+                }
+            }
+        }
+        buffer.unmap();
+        pixels
+    }
+
+    /// How many pixels carry `color`, within a rounding step per channel.
+    fn pixels_of(pixels: &[u8], color: [f32; 4]) -> usize {
+        let expected = color.map(|channel| (channel * 255.0).round() as i32);
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| {
+                pixel.iter().enumerate().all(|(channel, value)| (i32::from(*value) - expected[channel]).abs() <= 2)
+            })
+            .count()
+    }
+
+    #[test]
+    #[ignore = "needs a GPU adapter; writes target/ui-shots/product-envelope-*.png"]
+    fn the_product_envelope_draws_both_inks_and_nothing_when_it_has_parts() {
+        let Some((device, queue)) = gpu_device() else {
+            println!("this machine has no GPU adapter to render the product envelope with");
+            return;
+        };
+        let camera = Camera::new(DVec3::new(0.0, 0.0, 350.0), 4500.0).expect("camera");
+        let mut frame = SceneFrame { camera, ..SceneFrame::default() };
+        let box_size = DVec3::new(500.0, 400.0, 700.0);
+        for (id, x, state) in [
+            (1, -800.0, ProductEnvelopeState::Open),
+            (2, 0.0, ProductEnvelopeState::ClosedEmpty),
+            (3, 800.0, ProductEnvelopeState::ClosedWithParts),
+        ] {
+            frame.push_product_envelope(ProductEnvelope {
+                id: Id::new(id).expect("id"),
+                size: box_size,
+                world_transform: DMat4::from_translation(DVec3::new(x, 0.0, 0.0)),
+                state,
+            });
+        }
+        let mut renderer = ViewportRenderer::new(&device, 1280, 800);
+        let directory = furnicraft_testkit::ui_shots_dir().expect("the shots directory is created");
+
+        for (name, colors) in [("dark", SceneColors::DARK), ("light", SceneColors::LIGHT)] {
+            frame.apply_colors(colors);
+            renderer.upload(&device, &frame).expect("the envelopes upload");
+            renderer.render(&device, &queue, &frame);
+            let pixels = read_pixels(&renderer, &device, &queue);
+            let path = directory.join(format!("product-envelope-{name}.png"));
+            furnicraft_testkit::write_png(&path, 1280, 800, &pixels).expect("the shot is written");
+            let active = pixels_of(&pixels, colors.product_envelope_active);
+            let inactive = pixels_of(&pixels, colors.product_envelope_inactive);
+            assert!(active > 20, "{name}: the open envelope is drawn, {active} pixels");
+            assert!(inactive > 20, "{name}: the closed empty envelope is drawn, {inactive} pixels");
+        }
+
+        // A closed product with parts keeps no line at all: the same frame without the other two
+        // boxes paints neither ink.
+        let mut hidden = frame.clone();
+        hidden.product_envelopes.retain(|envelope| envelope.state == ProductEnvelopeState::ClosedWithParts);
+        renderer.upload(&device, &hidden).expect("the hidden envelope uploads");
+        renderer.render(&device, &queue, &hidden);
+        let pixels = read_pixels(&renderer, &device, &queue);
+        let colors = SceneColors::DARK;
+        assert_eq!(pixels_of(&pixels, colors.product_envelope_active), 0);
+        assert_eq!(pixels_of(&pixels, colors.product_envelope_inactive), 0, "a piece with parts draws no box");
     }
 
     #[test]

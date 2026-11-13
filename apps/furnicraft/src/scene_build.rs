@@ -13,13 +13,13 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::EvaluationCache;
 use furnicraft_model::{
-    CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
-    Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
-    StructuralKind,
+    CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, Envelope,
+    FaceSide, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement,
+    Project, StructuralKind,
 };
 use furnicraft_scene::{
-    Camera, ContactShadow, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection,
-    SceneFrame,
+    Camera, ContactShadow, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, ProductEnvelope,
+    ProductEnvelopeState, Projection, SceneFrame,
 };
 use furnicraft_ui::ViewFlags;
 use furnicraft_units::Length;
@@ -202,20 +202,25 @@ pub fn sample_catalog() -> Result<Catalog, String> {
     Catalog::new(vec![oak, white], vec![oak_edge, white_edge]).map_err(describe)
 }
 
-/// Evaluates a constructive object into world-space drawables.
+/// Evaluates a constructive object into world-space drawables and product envelopes.
 ///
 /// The cache is the only evaluator: a node whose derivation inputs did not change is reused, so a
 /// move, a rename or an unrelated edit rebuilds no mesh.
+///
+/// `open_product` is the session's one open product (ADR 0098), which only decides the ink of its
+/// envelope; until the open/close operations land (N3) the shell passes `None` and every product is
+/// drawn as closed. It is view state, never document data.
 pub fn evaluate(
     cache: &mut EvaluationCache,
     kernel: &mut TruckKernel,
     session: &Session,
     flags: &ViewFlags,
+    open_product: Option<Id>,
 ) -> Result<EvaluatedScene, String> {
     let project = session.project();
     let root_world = Placement::compose(Placement::IDENTITY, project.root().placement()).map_err(describe)?;
     cache.start();
-    let mut evaluation = Evaluation::new(cache, kernel, session, flags);
+    let mut evaluation = Evaluation::new(cache, kernel, session, flags, open_product);
     let mut scene_bounds = Bounds::empty();
     for child in project.root().children() {
         let subtree = match evaluation.collect(std::slice::from_ref(child), root_world) {
@@ -343,6 +348,8 @@ struct Evaluation<'a> {
     session: &'a Session,
     /// The session's hidden set: a hidden node and its whole subtree are skipped.
     flags: &'a ViewFlags,
+    /// The one open product, whose envelope takes the active ink, or `None` while none is open.
+    open_product: Option<Id>,
     options: TessOptions,
     frame: SceneFrame,
     palette_index: usize,
@@ -354,12 +361,14 @@ impl<'a> Evaluation<'a> {
         kernel: &'a mut TruckKernel,
         session: &'a Session,
         flags: &'a ViewFlags,
+        open_product: Option<Id>,
     ) -> Self {
         Self {
             cache,
             kernel,
             session,
             flags,
+            open_product,
             options: TessOptions::default(),
             frame: SceneFrame::default(),
             palette_index: 0,
@@ -377,7 +386,11 @@ impl<'a> Evaluation<'a> {
             let child_bounds = match child {
                 Node::Container(container) => {
                     let world = Placement::compose(parent, container.placement()).map_err(describe)?;
-                    self.collect(container.children(), world)?
+                    let subtree = self.collect(container.children(), world)?;
+                    match container.envelope() {
+                        Some(envelope) => self.collect_product(container.id(), envelope, world, subtree),
+                        None => subtree,
+                    }
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
                 Node::Object(object) => self.collect_object(object, parent)?,
@@ -386,6 +399,41 @@ impl<'a> Evaluation<'a> {
             bounds.include(child_bounds);
         }
         Ok(bounds)
+    }
+
+    /// Records one product's authored box as a scene item and returns the subtree bounds with it.
+    ///
+    /// The three states of ADR 0100 are decided here and nowhere else: the open product is the one
+    /// the session names, a closed product whose subtree drew something keeps its lines hidden, and
+    /// a closed product with nothing in it still shows its box. The envelope joins the drawn bounds
+    /// so *Frame all* sees an empty piece; it never joins the solid bounds, because a reserved box is
+    /// not a body and casts no contact shadow.
+    fn collect_product(
+        &mut self,
+        id: Id,
+        envelope: Envelope,
+        world: Placement,
+        mut bounds: SubtreeBounds,
+    ) -> SubtreeBounds {
+        let state = if self.open_product == Some(id) {
+            ProductEnvelopeState::Open
+        } else if bounds.all.valid {
+            ProductEnvelopeState::ClosedWithParts
+        } else {
+            ProductEnvelopeState::ClosedEmpty
+        };
+        let size =
+            DVec3::new(envelope.x().millimetres_f64(), envelope.y().millimetres_f64(), envelope.z().millimetres_f64());
+        let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+        for bits in 0..8 {
+            bounds.all.include_point(transform.transform_point3(DVec3::new(
+                if bits & 1 == 0 { 0.0 } else { size.x },
+                if bits & 2 == 0 { 0.0 } else { size.y },
+                if bits & 4 == 0 { 0.0 } else { size.z },
+            )));
+        }
+        self.frame.push_product_envelope(ProductEnvelope { id, size, world_transform: transform, state });
+        bounds
     }
 
     fn collect_panel(&mut self, panel: &Panel, parent: Placement) -> Result<SubtreeBounds, String> {
@@ -567,7 +615,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use furnicraft_model::{ContourSegment, Geometry, Path, Revision};
+    use furnicraft_model::{ClassCode, ContourSegment, Geometry, Path, Revision};
     use furnicraft_testkit::sample_project;
 
     fn panels_in<'a>(children: &'a [Node], panels: &mut Vec<&'a Panel>) {
@@ -815,7 +863,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty());
         assert!(evaluated.frame.shadows().is_empty(), "nothing on the floor casts a shadow");
         assert_eq!(evaluated.bounds.center(), None);
@@ -864,7 +913,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         assert_eq!(evaluated.frame.polylines().len(), 1);
         assert!(evaluated.frame.shadows().is_empty(), "a flat chain is not a body and stands on nothing");
     }
@@ -874,7 +924,8 @@ mod tests {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.shadows().len(), 1, "only the floor-standing group casts one");
         let shadow = evaluated.frame.shadows().first().expect("shadow");
@@ -920,7 +971,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         assert_eq!(evaluated.frame.drawables().len(), 1, "the derived mesh is one drawable");
         let drawable = &evaluated.frame.drawables()[0];
         assert_eq!(drawable.id, object, "the drawable carries the object id, so picking and selection work");
@@ -942,7 +994,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         assert_eq!(evaluated.frame.drawables().len(), 1, "a primitive is one drawable");
         let drawable = &evaluated.frame.drawables()[0];
         assert_eq!(drawable.id, object, "the drawable carries the object id");
@@ -974,7 +1027,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty(), "a path has no solid");
         assert_eq!(evaluated.frame.polylines().len(), 1);
         let line = &evaluated.frame.polylines()[0];
@@ -1011,7 +1065,8 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
         let line = &evaluated.frame.polylines()[0];
         assert_eq!(line.points.len(), 4, "the closing segment keeps its end point");
         assert_eq!(line.points[3], line.points[0], "the chain closes on its first point");
@@ -1022,7 +1077,8 @@ mod tests {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let evaluated =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.drawables().len(), 6);
         let mut groups = std::collections::HashMap::new();
@@ -1062,13 +1118,13 @@ mod tests {
         let renamed = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let first = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("first scene");
+        let first = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("first scene");
 
         // A rename bumps the document revision but none of the derived geometry depends on it.
         let params = serde_json::json!({ "node": renamed, "name": "Shelf" });
         session.dispatch("node.rename", &params).expect("rename");
 
-        let second = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("second scene");
+        let second = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("second scene");
         assert!(session.project().revision() > Revision::ZERO);
         assert_eq!(first.frame.drawables().len(), second.frame.drawables().len());
         for (before, after) in first.frame.drawables().iter().zip(second.frame.drawables()) {
@@ -1103,13 +1159,13 @@ mod tests {
         let revision = session.project().revision();
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let stored = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("stored scene");
+        let stored = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("stored scene");
         assert!((top_of(&stored, object) - 100.0).abs() < 0.5, "the document draws its own height");
 
         let mut previewed = body;
         previewed.set_height(millimetres(250).expect("height")).expect("a preview height");
         session.set_preview_geometry(object, Geometry::Constructive(previewed));
-        let preview = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("preview scene");
+        let preview = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("preview scene");
 
         assert_eq!(session.preview().len(), 1, "one node is previewed");
         assert_eq!(session.project().revision(), revision, "a preview is not an edit");
@@ -1117,7 +1173,8 @@ mod tests {
         assert!((top_of(&preview, object) - 250.0).abs() < 0.5, "the frame shows the preview height");
 
         session.clear_preview();
-        let restored = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("restored scene");
+        let restored =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("restored scene");
         assert!((top_of(&restored, object) - 100.0).abs() < 0.5, "the cross restores the pre-command body");
     }
 
@@ -1127,13 +1184,13 @@ mod tests {
         let id = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("before move");
+        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("before move");
 
         let placement = Placement::new(DVec3::new(400.0, -500.0, 0.0), DQuat::IDENTITY).expect("placement");
         let params = serde_json::json!({ "node": id, "placement": placement });
         session.dispatch("node.placement.set", &params).expect("move");
 
-        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("after move");
+        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("after move");
         assert!(
             Arc::ptr_eq(mesh_of(&before, id), mesh_of(&after, id)),
             "a placement is not a derivation input, so the mesh is reused"
@@ -1149,7 +1206,7 @@ mod tests {
         let untouched = panel_id(&session, "Back panel");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("before resize");
+        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("before resize");
 
         let size = furnicraft_model::PanelNominalSize::new(
             millimetres(650).expect("length"),
@@ -1159,7 +1216,7 @@ mod tests {
         let params = serde_json::json!({ "panel": resized, "nominal_size": size });
         session.dispatch("panel.resize", &params).expect("resize");
 
-        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("after resize");
+        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("after resize");
         assert!(!Arc::ptr_eq(mesh_of(&before, resized), mesh_of(&after, resized)), "the resized panel rebuilds");
         assert!(
             Arc::ptr_eq(mesh_of(&before, untouched), mesh_of(&after, untouched)),
@@ -1173,12 +1230,13 @@ mod tests {
         let id = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("scene");
+        evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("scene");
         assert!(cache.cached(id).is_some());
 
         let params = serde_json::json!({ "node": id });
         session.dispatch("node.delete", &params).expect("delete");
-        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("scene after delete");
+        let after =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("scene after delete");
         assert!(cache.cached(id).is_none(), "a deleted node releases its mesh");
         assert!(after.frame.drawables().iter().all(|drawable| drawable.id != id));
     }
@@ -1195,12 +1253,13 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
 
-        let visible = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("the sample scene");
+        let visible =
+            evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("the sample scene");
         assert!(visible.frame.drawables().iter().any(|drawable| drawable.id == front));
 
         let mut flags = ViewFlags::default();
         flags.set_hidden(drawer, true);
-        let hidden = evaluate(&mut cache, &mut kernel, &session, &flags).expect("the scene without the drawer");
+        let hidden = evaluate(&mut cache, &mut kernel, &session, &flags, None).expect("the scene without the drawer");
         let drawn: Vec<Id> = hidden.frame.drawables().iter().map(|drawable| drawable.id).collect();
         assert!(!drawn.contains(&front), "a child of a hidden container is not drawn");
         assert!(drawn.contains(&shelf), "a sibling branch stays drawn");
@@ -1265,7 +1324,7 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
 
-        let mut visible = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("the scene");
+        let mut visible = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("the scene");
         visible.frame.camera = camera;
         assert_eq!(
             crate::mesh_pick::pick_scene(viewport, &visible.frame, pointer),
@@ -1275,12 +1334,159 @@ mod tests {
 
         let mut flags = ViewFlags::default();
         flags.set_hidden(id(2).expect("id"), true);
-        let mut hidden = evaluate(&mut cache, &mut kernel, &session, &flags).expect("the scene without the panel");
+        let mut hidden =
+            evaluate(&mut cache, &mut kernel, &session, &flags, None).expect("the scene without the panel");
         hidden.frame.camera = camera;
         assert_eq!(
             crate::mesh_pick::pick_scene(viewport, &hidden.frame, pointer),
             None,
             "a hidden panel is not in the frame, so the ray finds nothing"
         );
+    }
+
+    /// A root with one product of `1 x 1 x 1 m` at `(100, 200, 0)` and, when asked, one flat panel
+    /// inside it. The product is not the root, because a product is always a node of the scene.
+    fn product_scene(with_panel: bool) -> (Session, Id) {
+        let root = Container::new(id(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root_id = project.root().id();
+        let envelope = Envelope::new(
+            millimetres(1000).expect("length"),
+            millimetres(1000).expect("length"),
+            millimetres(1000).expect("length"),
+        )
+        .expect("a valid envelope");
+        let placement = Placement::new(DVec3::new(100.0, 200.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let product =
+            project.add_product(root_id, "Cabinet", ClassCode::GENERAL_PRODUCT, envelope, placement).expect("product");
+        if with_panel {
+            project
+                .add_panel(
+                    product,
+                    "Shelf",
+                    panel_nominal_size(600, 400).expect("size"),
+                    None,
+                    millimetres(18).expect("thickness"),
+                    Placement::IDENTITY,
+                )
+                .expect("panel");
+        }
+        project.validate().expect("a valid product scene");
+        (Session::new(project), product)
+    }
+
+    fn ray_down(x: f64, y: f64) -> furnicraft_scene::Ray {
+        furnicraft_scene::Ray::new(DVec3::new(x, y, 2000.0), -DVec3::Z).expect("ray")
+    }
+
+    #[test]
+    fn a_product_envelope_is_drawn_in_the_three_states_of_the_decision() {
+        let (empty, product) = product_scene(false);
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let closed = evaluate(&mut cache, &mut kernel, &empty, &ViewFlags::default(), None).expect("scene");
+        let envelopes = closed.frame.product_envelopes();
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].id, product);
+        assert_eq!(envelopes[0].state, ProductEnvelopeState::ClosedEmpty);
+        assert_eq!(envelopes[0].size, DVec3::splat(1000.0));
+        assert_eq!(
+            DVec3::new(
+                envelopes[0].world_transform.w_axis.x,
+                envelopes[0].world_transform.w_axis.y,
+                envelopes[0].world_transform.w_axis.z,
+            ),
+            DVec3::new(100.0, 200.0, 0.0)
+        );
+        assert!(
+            closed.bounds.radius().is_some_and(|radius| radius > 0.0),
+            "an empty piece is visible, so it is framed"
+        );
+
+        let open = evaluate(&mut cache, &mut kernel, &empty, &ViewFlags::default(), Some(product)).expect("scene");
+        assert_eq!(open.frame.product_envelopes()[0].state, ProductEnvelopeState::Open);
+
+        let (filled, product) = product_scene(true);
+        let with_parts = evaluate(&mut cache, &mut kernel, &filled, &ViewFlags::default(), None).expect("scene");
+        assert_eq!(with_parts.frame.product_envelopes()[0].state, ProductEnvelopeState::ClosedWithParts);
+        let opened = evaluate(&mut cache, &mut kernel, &filled, &ViewFlags::default(), Some(product)).expect("scene");
+        assert_eq!(opened.frame.product_envelopes()[0].state, ProductEnvelopeState::Open, "opening reveals the box");
+        assert!(
+            with_parts.frame.drawables().iter().any(|drawable| drawable.id != product),
+            "the panel is drawn inside the closed piece"
+        );
+        assert!(closed.frame.drawables().iter().all(|drawable| drawable.id != product), "the envelope is never a body");
+    }
+
+    #[test]
+    fn a_product_envelope_is_picked_inside_its_empty_space() {
+        let (session, product) = product_scene(false);
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let scene = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("scene");
+
+        assert_eq!(scene.frame.pick(ray_down(600.0, 700.0), 600.0), Some(product), "a click in the void");
+        assert_eq!(scene.frame.pick(ray_down(150.0, 250.0), 600.0), Some(product), "a click on the box edge");
+        assert_eq!(scene.frame.pick(ray_down(50.0, 50.0), 600.0), None, "a click outside the piece");
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(product, true);
+        let hidden = evaluate(&mut cache, &mut kernel, &session, &flags, None).expect("scene without the piece");
+        assert_eq!(hidden.frame.pick(ray_down(600.0, 700.0), 600.0), None, "a hidden piece is not picked");
+    }
+
+    #[test]
+    fn a_panel_inside_the_frame_wins_the_click() {
+        let (session, product) = product_scene(true);
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let scene = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("scene");
+        let panel = scene
+            .frame
+            .drawables()
+            .iter()
+            .find(|drawable| drawable.id != product)
+            .map(|drawable| drawable.id)
+            .expect("the panel is drawn");
+
+        assert_eq!(scene.frame.pick(ray_down(150.0, 250.0), 600.0), Some(panel), "a click on a part picks the part");
+        assert_eq!(scene.frame.pick(ray_down(950.0, 950.0), 600.0), Some(product), "the void still picks the frame");
+        assert_ne!(panel, product);
+    }
+
+    #[test]
+    fn the_innermost_product_wins_when_boxes_nest() {
+        let root = Container::new(id(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root_id = project.root().id();
+        let box_envelope = |side: i64| {
+            Envelope::new(
+                millimetres(side).expect("length"),
+                millimetres(side).expect("length"),
+                millimetres(side).expect("length"),
+            )
+            .expect("a valid envelope")
+        };
+        let outer = project
+            .add_product(root_id, "Outer", ClassCode::GENERAL_PRODUCT, box_envelope(1000), Placement::IDENTITY)
+            .expect("outer product");
+        let inner_placement = Placement::new(DVec3::new(400.0, 400.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let inner = project
+            .add_product(root_id, "Inner", ClassCode::GENERAL_PRODUCT, box_envelope(200), inner_placement)
+            .expect("inner product");
+        project.validate().expect("valid nested products");
+        let session = Session::new(project);
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let scene = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None).expect("scene");
+
+        assert_eq!(scene.frame.product_envelopes().len(), 2, "both pieces carry a box");
+        assert_eq!(scene.frame.pick(ray_down(500.0, 500.0), 600.0), Some(inner), "the tightest box is the piece meant");
+        assert_eq!(
+            scene.frame.pick(ray_down(100.0, 100.0), 600.0),
+            Some(outer),
+            "outside the inner piece is the outer"
+        );
+        assert_ne!(inner, outer);
     }
 }

@@ -25,7 +25,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{ContactShadow, Drawable, Grid, Polyline};
+use furnicraft_scene::{ContactShadow, Drawable, Grid, Polyline, ProductEnvelope, ProductEnvelopeState};
 
 use crate::RenderError;
 use crate::pipelines::MAX_STENCIL_OWNERS;
@@ -48,6 +48,18 @@ pub(crate) const SHADOW_SEGMENTS: usize = 48;
 /// A shadow is a fan of [`SHADOW_SEGMENTS`] triangles; this cap is far above any furniture scene and
 /// keeps a hostile frame from allocating unbounded geometry.
 pub(crate) const MAX_CONTACT_SHADOWS: usize = 4096;
+
+/// One dash cycle of a product envelope, as a fraction of its longest side.
+///
+/// A cycle tied to the piece instead of the zoom keeps every envelope about two dozen dashes per
+/// side: a 600 mm cabinet and a 3 m wardrobe both read as a dashed box and neither turns into a
+/// solid line at the far end of the room. The world-space pattern is the price; the camera never
+/// re-uploads geometry, so a screen-space pattern would need a second shader entry.
+const ENVELOPE_CYCLES_PER_SIDE: f64 = 24.0;
+/// The shortest dash cycle an envelope may use, in millimetres; a tiny box still reads as dashes.
+const MIN_ENVELOPE_DASH_MM: f64 = 6.0;
+/// The painted fraction of one cycle: a dash and a gap about the same length.
+const ENVELOPE_DASH_DUTY: f64 = 0.55;
 
 /// Gamma-space ink for a light viewport.
 pub(crate) const EDGE_COLOR_DARK: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
@@ -245,6 +257,107 @@ pub(crate) fn polyline_vertices(polylines: &[Polyline], line_ink: [f32; 4]) -> R
         push_polyline_vertices(index, polyline, line_ink, &mut vertices)?;
     }
     Ok(vertices)
+}
+
+/// Flattens the product envelopes into one dashed line list in world space.
+///
+/// Each envelope is the twelve edges of a box in the product's own frame. A line is not a body, so
+/// the chain is dashed and the dashes are the renderer's promise that this box is reserved space,
+/// never a solid (ADR 0100). The state chooses the ink: active for the open product, inactive for a
+/// closed empty one, and nothing at all for a closed product whose parts speak for themselves.
+///
+/// A malformed size or transform is a [`RenderError`] naming the offender, so the shell can report
+/// it; the vertex budget is checked before the dashes are pushed. The list is one flat buffer drawn
+/// with the line pipeline, which writes no depth.
+pub(crate) fn product_envelope_vertices(
+    envelopes: &[ProductEnvelope],
+    active: [f32; 4],
+    inactive: [f32; 4],
+) -> Result<Vec<MeshVertex>, RenderError> {
+    let mut vertices = Vec::new();
+    for (index, envelope) in envelopes.iter().enumerate() {
+        push_product_envelope_vertices(index, envelope, active, inactive, &mut vertices)?;
+    }
+    Ok(vertices)
+}
+
+/// Appends one product envelope as dashed line-list vertices in world space.
+fn push_product_envelope_vertices(
+    index: usize,
+    envelope: &ProductEnvelope,
+    active: [f32; 4],
+    inactive: [f32; 4],
+    vertices: &mut Vec<MeshVertex>,
+) -> Result<(), RenderError> {
+    let color = match envelope.state {
+        ProductEnvelopeState::Open => active,
+        ProductEnvelopeState::ClosedEmpty => inactive,
+        ProductEnvelopeState::ClosedWithParts => return Ok(()),
+    };
+    let size = envelope.size;
+    if !size.is_finite() || size.min_element() <= 0.0 || !envelope.world_transform.is_finite() {
+        return Err(RenderError::InvalidProductEnvelope { index });
+    }
+    let color = sanitize_color(color);
+    let longest = size.max_element();
+    let cycle = (longest / ENVELOPE_CYCLES_PER_SIDE).max(MIN_ENVELOPE_DASH_MM);
+    let dash = cycle * ENVELOPE_DASH_DUTY;
+    let capacity = envelope_vertex_count(size, cycle);
+    if vertices.len().saturating_add(capacity) > MAX_VERTICES {
+        return Err(RenderError::ProductEnvelopeTooLarge { index });
+    }
+    for (start, end) in ENVELOPE_EDGES {
+        let start = envelope.world_transform.transform_point3(corner(start, size));
+        let end = envelope.world_transform.transform_point3(corner(end, size));
+        if !start.is_finite() || !end.is_finite() {
+            return Err(RenderError::InvalidProductEnvelope { index });
+        }
+        push_dashes(vertices, start, end, cycle, dash, color);
+    }
+    Ok(())
+}
+
+/// One corner of the local box; a bit in `bits` is the high side of one axis.
+fn corner(bits: usize, size: DVec3) -> DVec3 {
+    DVec3::new(
+        if bits & 1 == 0 { 0.0 } else { size.x },
+        if bits & 2 == 0 { 0.0 } else { size.y },
+        if bits & 4 == 0 { 0.0 } else { size.z },
+    )
+}
+
+/// The twelve edges of a box as corner-index pairs; a pair differs in one bit.
+const ENVELOPE_EDGES: [(usize, usize); 12] =
+    [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
+
+/// How many line-list vertices the dashes of one box need, so the budget is checked before the walk.
+fn envelope_vertex_count(size: DVec3, cycle: f64) -> usize {
+    let mut total = 0usize;
+    for (start, end) in ENVELOPE_EDGES {
+        let length = corner(start, size).distance(corner(end, size));
+        let dashes = (length / cycle).ceil().max(1.0) as usize;
+        total = total.saturating_add(dashes.saturating_mul(2));
+    }
+    total
+}
+
+/// Pushes one edge as dashes: a painted run, a gap, and so on to the end of the edge.
+fn push_dashes(vertices: &mut Vec<MeshVertex>, start: DVec3, end: DVec3, cycle: f64, dash: f64, color: [f32; 4]) {
+    let length = start.distance(end);
+    if !length.is_finite() || length <= 0.0 {
+        return;
+    }
+    let direction = (end - start) / length;
+    let mut along = 0.0;
+    while along < length && vertices.len().saturating_add(2) <= MAX_VERTICES {
+        let dash_end = (along + dash).min(length);
+        let a = start + direction * along;
+        let b = start + direction * dash_end;
+        if a.is_finite() && b.is_finite() {
+            push_line(vertices, [a.x, a.y, a.z], [b.x, b.y, b.z], color);
+        }
+        along += cycle;
+    }
 }
 
 /// Appends one polyline as pairs of line-list vertices in world space.
