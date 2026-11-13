@@ -828,6 +828,7 @@ messages! {
 
     // The ribbon's tools (U68); a planned row is named here before its command exists.
     ToolProductFrame = ["Product frame", "Каркас изделия"],
+    ToolProductFrameDraw = ["Frame by drawing", "Каркас по чертежу"],
     ToolPanel = ["Panel", "Панель"],
     ToolPost = ["Post", "Стойка"],
     ToolShelf = ["Shelf", "Полка"],
@@ -946,6 +947,7 @@ messages! {
     PrimitiveClickPlane = ["{}: click the work plane", "{}: щёлкните по рабочей плоскости"],
     PrimitiveDrawBase = ["{}: draw its base on the work plane", "{}: начертите основание на рабочей плоскости"],
     BoxHeight = ["Box height", "Высота блока"],
+    FrameHeight = ["Frame height", "Высота каркаса"],
 
     // ── Display names ───────────────────────────────────────────────────────
     Axonometric = ["Axonometric", "Аксонометрия"],

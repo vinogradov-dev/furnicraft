@@ -412,7 +412,7 @@ fn the_box_tool_gesture_is_painted_offscreen() {
     // Two points on the work plane, and the height the pointer pulls above the base.
     let corners = {
         let document = app.tabs.active_mut();
-        document.editor.arm_box();
+        document.editor.arm_box(furnicraft_ui::BoxOwner::Cuboid);
         let rect = document.scene_rect().expect("the settled frame gives the scene a rectangle");
         let camera = document.camera();
         let project = document.session.project();
@@ -559,6 +559,107 @@ fn the_box_grips_are_painted_offscreen() {
     let picture = Picture { width: size[0], height: size[1], rgba };
     assert!(!picture.is_flat(), "{} draws less than one colour", path.display());
     println!("the box grips are in {}", path.display());
+}
+
+/// Draws a selected product frame with its fourteen grips into one picture.
+///
+/// A frame owns the same box editor as a solid (ADR 0101), with two differences the pixels have to
+/// show: all eight corners are drawn, because the reserved box is tall, and the two top corners sit
+/// on the reserved height rather than on the floor. The frame is created through `product.create`,
+/// so the shot proves the grips read the envelope and not a primitive.
+#[test]
+#[ignore = "needs a GPU adapter; writes target/ui-shots/frame-grips.png"]
+fn the_frame_grips_are_painted_offscreen() {
+    let render_state = match render_state() {
+        Ok(state) => state,
+        Err(reason) => {
+            println!("{reason}");
+            return;
+        }
+    };
+    let ctx = egui::Context::default();
+    let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("frame-grips-workspace.json");
+    // An empty document, so the picture is the reserved box and nothing else.
+    let session = crate::scene_build::empty_session().expect("an empty session");
+    let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
+        .expect("the application builds");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
+    let _ = settle(&mut app, &ctx, &render_state, screen);
+    {
+        let document = app.tabs.active_mut();
+        let root = document.session.project().root().id();
+        let params = serde_json::to_value(furnicraft_engine::ProductCreate {
+            parent: root,
+            name: "Cabinet".to_owned(),
+            class: Some(furnicraft_model::ClassCode::GENERAL_PRODUCT),
+            envelope: furnicraft_model::Envelope::new(
+                furnicraft_testkit::millimetres(900),
+                furnicraft_testkit::millimetres(560),
+                furnicraft_testkit::millimetres(1200),
+            )
+            .expect("a frame"),
+            placement: furnicraft_model::Placement::IDENTITY,
+        })
+        .expect("params");
+        let frame = document
+            .session
+            .dispatch(furnicraft_engine::product_cmds::PRODUCT_CREATE_ID, &params)
+            .expect("the frame is created")
+            .created_id()
+            .expect("an id");
+        // The frame stays open, so its envelope is drawn in the active ink: a closed frame with no
+        // parts draws a dimmer box, and a shot of dim lines is no eye check (ADR 0100).
+        document.session.open_product(frame);
+        document.editor.select_node(Some(frame));
+    }
+    // The bounds follow a rebuilt scene, so the fit waits for one frame before it fits the box.
+    let _ = settle(&mut app, &ctx, &render_state, screen);
+    {
+        // Frame the box the grips belong to: a two-metre frame would otherwise stand with its top
+        // corners past the camera that was fitted to the empty scene.
+        let document = app.tabs.active_mut();
+        document.frame_all();
+    }
+    let mut jobs = Vec::new();
+    for _ in 0..SETTLE_FRAMES {
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            app.frame(ui);
+        });
+        let mut delta = std::mem::take(&mut output.textures_delta);
+        {
+            let mut renderer = render_state.renderer.write();
+            for (id, images) in &delta.set {
+                for image in images {
+                    renderer.update_texture(&render_state.device, &render_state.queue, *id, image);
+                }
+            }
+            for id in &delta.free {
+                renderer.free_texture(id);
+            }
+        }
+        delta.clear();
+        jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+    {
+        // The grips the picture shows are the frame's, not a solid's: eight corners and six faces.
+        let document = app.tabs.active_mut();
+        let selected = document.editor.selected_nodes();
+        let [frame] = selected else { panic!("the frame is selected") };
+        let body = crate::box_gizmo::BoxBody::read(document.session.project(), *frame)
+            .expect("a selected frame is a box the grips can read");
+        assert_eq!(body.grips().len(), 14, "a frame shows eight corners and six faces");
+    }
+    let pixels_per_point = ctx.pixels_per_point();
+    let size =
+        [(WINDOW.x * pixels_per_point).round().max(1.0) as u32, (WINDOW.y * pixels_per_point).round().max(1.0) as u32];
+    let rgba = paint(&render_state, &jobs, size, pixels_per_point).expect("the frame paints");
+    let directory = furnicraft_testkit::ui_shots_dir().expect("the shots directory is created");
+    let path = directory.join("frame-grips.png");
+    furnicraft_testkit::write_png(&path, size[0], size[1], &rgba).expect("the picture is written");
+    app.tabs.active_mut().release_target();
+    let picture = Picture { width: size[0], height: size[1], rgba };
+    assert!(!picture.is_flat(), "{} draws less than one colour", path.display());
+    println!("the frame grips are in {}", path.display());
 }
 
 /// Draws the empty-space tool's ghost into one picture, so its accent and callouts can be looked at.

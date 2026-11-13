@@ -50,9 +50,13 @@ struct Harness {
 
 impl Harness {
     fn new(name: &str) -> Self {
+        Self::with_session(name, crate::scene_build::demo_session().expect("the sample session builds"))
+    }
+
+    /// A headless application around one session, for a test that wants a document of its own.
+    fn with_session(name: &str, session: furnicraft_engine::Session) -> Self {
         let path = furnicraft_testkit::scratch_dir(name).join("settings.json");
         let ctx = egui::Context::default();
-        let session = crate::scene_build::demo_session().expect("the sample session builds");
         let app = FurniCraftApp::headless(&ctx, path.clone(), Settings::default(), session)
             .expect("the application builds with no device, no adapter and no window");
         Self { ctx, app, path, drawn: Vec::new(), last_scene: None }
@@ -469,6 +473,95 @@ fn the_product_card_creates_a_frame_that_is_open_and_receives_the_next_part() {
         product,
         "the next part lands inside the new frame"
     );
+}
+
+#[test]
+fn the_drawn_frame_lands_as_one_product_of_exactly_the_ghost_size() {
+    // The frame is created and edited like a box (ADR 0101): the same base rectangle and height
+    // pull, and the ✓ dispatches `product.create` instead of `object.primitive.create`.
+    let mut harness = Harness::new("frame-drawn-product");
+    harness.settle();
+    let before = harness.revision();
+    let mm = furnicraft_testkit::millimetres;
+    {
+        let document = harness.app.tabs.active_mut();
+        document.editor.arm_box(furnicraft_ui::BoxOwner::Product);
+        assert!(!document.editor.click_box([mm(600), mm(560)]).expect("the anchor"), "the first click only anchors");
+        assert!(document.editor.click_box([mm(0), mm(0)]).expect("the base"), "the second fixes the base");
+        document.editor.pull_box_height(mm(720)).expect("the pull");
+        let ghost = document.editor.box_draft().and_then(furnicraft_ui::BoxDraft::sizes).expect("the ghost sizes");
+        assert_eq!(ghost, [mm(600), mm(560), mm(720)]);
+        document.finish_box(Lang::En).expect("the ✓ commits the drawn frame");
+    }
+    let document = harness.app.tabs.active();
+    let frame = document.session.active_product().expect("the drawn frame is opened for its parts");
+    let container = document.session.project().container(frame).expect("a container");
+    assert!(container.is_product(), "a drawn frame is a product");
+    let sides = container.envelope().expect("an envelope").components();
+    assert_eq!(sides, [mm(600), mm(560), mm(720)], "the frame keeps exactly the ghost's three sides");
+    assert_eq!(container.class(), ClassCode::GENERAL_PRODUCT, "the drawn gesture takes the placeholder class");
+    assert_eq!(harness.revision().get(), before.get() + 1, "the whole gesture is one command");
+    assert_eq!(document.editor.selected_nodes(), [frame], "the new frame is selected, so its grips show");
+    assert_eq!(document.editor.creation_target(document.session.project()), frame, "the next part lands inside");
+}
+
+#[test]
+fn a_drag_on_a_frame_corner_resizes_the_envelope_in_one_undo_step() {
+    // The grips read a frame exactly as they read a solid (ADR 0101): a press mints the edit scope,
+    // every move writes `product.envelope.set`, and the release leaves one undo entry.
+    let mut harness = Harness::with_session("frame-grip-drag", crate::scene_build::empty_session().expect("empty"));
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    // The new frame is the only object, so the fit frames its reserved box and every grip is on the
+    // scene rectangle.
+    harness.app.tabs.active_mut().frame_all();
+    harness.settle();
+    let (frame, grip, reached, before) = {
+        let document = harness.app.tabs.active_mut();
+        let frame = document.session.active_product().expect("the card opened a frame");
+        let project = document.session.project();
+        let envelope = project.container(frame).and_then(|frame| frame.envelope()).expect("an envelope");
+        let [width, depth, _height] = envelope.components().map(|side| side.millimetres_f64());
+        let world = project.world_placement(frame).expect("the frame's world placement");
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let camera = document.camera();
+        let at = |x: f64, y: f64| {
+            gizmo_math::screen_point(camera, rect, world.transform_point(furnicraft_geom::DVec3::new(x, y, 0.0)))
+                .expect("the frame's base is on screen")
+        };
+        (frame, at(width, depth), at(width - 100.0, depth - 100.0), harness.revision())
+    };
+    assert!(harness.app.tabs.active().editor.selected_node() == Some(frame), "the new frame is selected");
+    let rect = harness.app.tabs.active().scene_rect().expect("a scene rectangle");
+    assert!(rect.contains(grip) && rect.contains(reached), "the drag stays on the scene: {grip:?} {reached:?}");
+
+    harness.press_at(grip, egui::PointerButton::Primary);
+    harness.run(vec![egui::Event::PointerMoved(reached)]);
+    harness.release_at(reached, egui::PointerButton::Primary);
+    harness.settle();
+
+    let envelope_sides = |harness: &Harness| {
+        harness
+            .app
+            .tabs
+            .active()
+            .session
+            .project()
+            .container(frame)
+            .and_then(|frame| frame.envelope())
+            .expect("the envelope is still there")
+            .components()
+            .map(|side| side.millimetres_f64())
+    };
+    let sides = envelope_sides(&harness);
+    assert!((sides[0] - 500.0).abs() <= 5.0, "the width followed the corner: {sides:?}");
+    assert!((sides[1] - 460.0).abs() <= 5.0, "the depth followed the corner: {sides:?}");
+    assert_eq!(harness.revision().get(), before.get() + 1, "the whole drag is one command");
+    harness.app.tabs.active_mut().session.undo().expect("one undo takes the drag back");
+    let sides = envelope_sides(&harness);
+    assert!((sides[0] - 600.0).abs() < 1.0e-9 && (sides[1] - 560.0).abs() < 1.0e-9, "the frame is back: {sides:?}");
 }
 
 #[test]

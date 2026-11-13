@@ -42,7 +42,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    exactly the ghost size with the placeholder class; the card and the gesture produce the same
    document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
    green.
-  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs, crates/engine/src/node_cmds.rs`
+  `files: apps/furnicraft/src/box_gizmo.rs, crates/ui/src/box_tool.rs`
 
 ## Bugs
 

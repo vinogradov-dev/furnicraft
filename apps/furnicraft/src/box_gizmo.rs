@@ -240,12 +240,20 @@ fn paint_size(painter: &egui::Painter, pointer: Pos2, label: &str) {
     painter.galley(rect.min + padding, galley, SIZE_COLOR);
 }
 
-/// Commits the box gesture as one `object.primitive.create` and clears the draft.
-pub(crate) fn commit_box(session: &mut Session, editor: &mut Editor, plane: WorkPlane) -> Result<Id, String> {
+/// Commits the box gesture as one command and clears the draft.
+///
+/// The draft's owner picks the command: a solid becomes an `object.primitive.create` and a frame a
+/// `product.create` at the scene root (ADR 0101). `lang` names a frame the way the card would.
+pub(crate) fn commit_box(
+    session: &mut Session,
+    editor: &mut Editor,
+    plane: WorkPlane,
+    lang: furnicraft_text::Lang,
+) -> Result<Id, String> {
     let draft = editor.box_draft().copied().ok_or_else(|| "No box is being drawn.".to_owned())?;
     let (placement, _) =
         commit_frame(plane, &draft).ok_or_else(|| "The box has no base corner or height.".to_owned())?;
-    editor.commit_box(session, placement)
+    editor.commit_box(session, placement, lang)
 }
 
 /// One side of a selected box, named the way a grip moves it.
@@ -750,7 +758,7 @@ mod tests {
     #[test]
     fn the_committed_frame_is_the_ghost_the_maker_saw() {
         let mut editor = Editor::new();
-        editor.arm_box();
+        editor.arm_box(BoxOwner::Cuboid);
         editor.click_box([millimetres(600), millimetres(400)]).expect("anchor");
         editor.click_box([millimetres(0), millimetres(0)]).expect("base");
         editor.pull_box_height(millimetres(720)).expect("pull");

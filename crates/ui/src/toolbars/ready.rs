@@ -98,6 +98,14 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
             hint: tool_hint(tool.label.text(lang), tool.shortcut),
             action: Some(ToolAction::CreateProductCard),
         },
+        ToolKind::ProductDraw => Ready {
+            enabled: true,
+            armed: is_armed(active, kind),
+            // The drawn frame is the box gesture with the envelope as its owner: the first step is
+            // the base rectangle, exactly as it is for a solid (ADR 0101).
+            hint: Message::PrimitiveDrawBase.with(lang, [tool.label.text(lang)]),
+            action: Some(ToolAction::DrawProductFrame),
+        },
         ToolKind::Panel => Ready {
             enabled: has_panel_material,
             armed: false,

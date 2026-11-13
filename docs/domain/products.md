@@ -119,18 +119,21 @@ so its voids are not offered as targets.
 
 ## 5. The workspace: create, open, close
 
-**A frame is created open.** The ribbon's *add frame* opens a card: width, depth and height in 1 mm
-steps, and a type field listing product classes. Without a choice the frame is «изделие общего
-назначения» / “general product”, the editor's placeholder class, so the envelope invariant holds and
-the type is a later edit rather than a prerequisite.
+**A frame is created open, in two ways.** The ribbon's *Product frame* cell opens a card: width,
+depth and height in 1 mm steps, and a type field listing product classes. Its second method,
+*Frame by drawing*, arms the shared box tool (0101): base rectangle on the work plane, then the height
+pulled from a wireframe preview. Both paths dispatch `product.create`, and nothing else may create a
+product.
 
-**The card and the box gesture reach the same command.** Once the shared box tool exists (0101) the
-frame can also be drawn: base rectangle on the work plane, then the height pulled from a wireframe
-preview. Both paths dispatch `product.create`, and nothing else may create a product.
+**One class comes from the card, the placeholder from the gesture.** A typed frame takes the class the
+maker picked; a drawn one takes «изделие общего назначения» / “general product”, the editor's
+placeholder class, because a pointer gesture names no type. The envelope invariant holds either way,
+and the type is a later edit rather than a prerequisite.
 
-**Placement is deterministic.** An empty scene puts the frame at the origin, on the floor. Otherwise
-it goes beside the nearest product, on the floor, clear of every other envelope, and becomes selected.
-The maker then moves it with the furniture move tool (§8).
+**Placement is the gesture's or the card's.** The card puts the frame at the origin in an empty scene,
+and otherwise beside the nearest product, on the floor, clear of every other envelope. A drawn frame
+stands where its base rectangle was drawn. Either way it becomes selected and open, and the maker
+moves it with the furniture move tool (§8).
 
 **Opening is a double click in the viewport**, or the tree. At most one product is open at a time, and
 opening another closes the previous one. Openness is session state per tab, never a document field

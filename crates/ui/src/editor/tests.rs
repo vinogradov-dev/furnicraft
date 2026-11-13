@@ -2,6 +2,7 @@
 
 use super::*;
 
+use crate::box_tool::BoxOwner;
 use crate::toolbars::RibbonView;
 
 use crate::contour_edit::ContourTarget;
@@ -885,7 +886,7 @@ fn every_primitive_kind_can_be_armed() {
     let mut editor = Editor::new();
     editor.arm_primitive(PrimitiveKind::Cuboid, size).expect("arm the box");
     assert_eq!(editor.pending_primitive(), None, "a box waits for its base, not for a click");
-    assert_eq!(editor.box_tool(), Some(PrimitiveKind::Cuboid));
+    assert_eq!(editor.box_tool(), Some(BoxOwner::Cuboid));
 }
 
 #[test]
@@ -1433,7 +1434,7 @@ fn the_box_tool_draws_its_base_and_pulls_its_height() {
     let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
 
     editor.arm_primitive(PrimitiveKind::Cuboid, mm(200)).expect("arm the box tool");
-    assert_eq!(editor.box_tool(), Some(PrimitiveKind::Cuboid));
+    assert_eq!(editor.box_tool(), Some(BoxOwner::Cuboid));
     assert!(!editor.click_box([mm(600), mm(400)]).expect("the anchor"), "the first click only anchors");
     editor.set_box_corner([mm(0), mm(0)]);
     assert!(editor.click_box([mm(0), mm(0)]).expect("the base"), "the second click fixes the base");
@@ -1450,7 +1451,7 @@ fn the_box_tool_draws_its_base_and_pulls_its_height() {
     // The plane frame sits on the base rectangle's minimum corner, so the box's own zero is that
     // corner and the height runs along the plane's normal.
     let placement = Placement::IDENTITY.with_translation(mm(0), mm(0), mm(0)).expect("the base corner");
-    let id = editor.commit_box(&mut session, placement).expect("commit the box");
+    let id = editor.commit_box(&mut session, placement, furnicraft_text::Lang::En).expect("commit the box");
     assert!(editor.box_tool().is_none(), "the gesture is over");
     let object = session.project().object(id).expect("the new box");
     assert_eq!(object.name(), "Box");
@@ -1478,6 +1479,79 @@ fn a_box_draft_that_is_cancelled_writes_nothing() {
     assert!(editor.box_tool().is_none());
     assert_eq!(session.project().revision().get(), 0, "the draft never reached the document");
     assert!(!session.can_undo());
+}
+
+/// A session with nothing in it, so the card and the gesture both land at the origin.
+fn empty_editor_session() -> Session {
+    let root = Container::new(Id::new(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
+    Session::with_catalog(Project::new(root).expect("a project"), sample_catalog())
+}
+
+/// Draw the box whose base runs from `[600, 560]` to the plane origin and whose height is 720 mm.
+fn draw_the_frame_box(editor: &mut Editor) {
+    let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+    editor.arm_box(BoxOwner::Product);
+    assert_eq!(editor.box_tool(), Some(BoxOwner::Product), "the frame cell arms the box tool");
+    assert!(!editor.click_box([mm(600), mm(560)]).expect("the anchor"), "the first click only anchors");
+    assert!(editor.click_box([mm(0), mm(0)]).expect("the base"), "the second click fixes the base");
+    editor.pull_box_height(mm(720)).expect("the pull");
+}
+
+#[test]
+fn the_frame_tool_draws_the_box_the_ghost_shows_and_creates_it() {
+    let mut session = empty_editor_session();
+    let mut editor = Editor::new();
+    let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+    draw_the_frame_box(&mut editor);
+    assert_eq!(
+        editor.box_draft().and_then(BoxDraft::sizes),
+        Some([mm(600), mm(560), mm(720)]),
+        "the ghost is exactly the frame the ✓ builds"
+    );
+
+    let id = editor.commit_box(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit");
+    assert!(editor.box_tool().is_none(), "the gesture is over");
+    let frame = session.project().container(id).expect("the frame");
+    assert!(frame.is_product(), "a drawn frame is a product, not a plain container");
+    assert_eq!(frame.envelope().map(|envelope| envelope.components()), Some([mm(600), mm(560), mm(720)]));
+    assert_eq!(frame.class(), ClassCode::GENERAL_PRODUCT, "a drawn frame takes the placeholder class");
+    assert_eq!(frame.name(), "General product", "and the name the card gives that class");
+    assert_eq!(session.project().parent_of(id), Some(session.project().root().id()));
+    assert_eq!(session.active_product(), Some(id), "the new frame opens for its parts");
+    assert_eq!(editor.creation_parent(), Some(id), "and receives the next part");
+    assert_eq!(session.project().revision().get(), 1, "the whole gesture is one command");
+}
+
+#[test]
+fn the_ribbons_drawn_frame_method_arms_the_box_tool() {
+    let mut session = empty_editor_session();
+    let mut editor = Editor::new();
+    let outcome = editor
+        .apply_ribbon_actions(&mut session, vec![ToolAction::DrawProductFrame], furnicraft_text::Lang::En)
+        .expect("the drawn method arms");
+    assert_eq!(editor.box_tool(), Some(BoxOwner::Product), "the box tool draws a frame");
+    assert!(!outcome.open_product_card, "the drawn method opens no card");
+    assert_eq!(session.project().revision().get(), 0, "arming writes nothing");
+    editor.cancel_box();
+    assert!(editor.box_tool().is_none(), "Escape drops the draft");
+    assert_eq!(session.project().revision().get(), 0);
+}
+
+#[test]
+fn the_card_and_the_drawn_gesture_produce_the_same_document() {
+    let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+    let mut carded = empty_editor_session();
+    let mut card_editor = Editor::new();
+    let envelope = Envelope::new(mm(600), mm(560), mm(720)).expect("an envelope");
+    let draft = crate::product_card::ProductDraft { envelope, class: ClassCode::GENERAL_PRODUCT };
+    card_editor.create_product(&mut carded, draft, furnicraft_text::Lang::En).expect("the card creates the frame");
+
+    let mut drawn = empty_editor_session();
+    let mut drawn_editor = Editor::new();
+    draw_the_frame_box(&mut drawn_editor);
+    drawn_editor.commit_box(&mut drawn, Placement::IDENTITY, furnicraft_text::Lang::En).expect("the gesture");
+
+    assert_eq!(carded.project(), drawn.project(), "one command, one document, whichever entry was used");
 }
 
 #[test]

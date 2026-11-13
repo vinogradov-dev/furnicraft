@@ -20,6 +20,7 @@ use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
+use crate::box_tool::BoxOwner;
 use crate::command::{dispatch, json};
 use crate::toolbars::{self, ToolAction};
 
@@ -46,7 +47,8 @@ impl Editor {
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
         let active = toolbars::tool_activity(
             self.drawing.as_ref().map(|draft| draft.tool()),
-            self.pending_primitive.map(|pending| pending.kind).or_else(|| self.box_tool()),
+            self.pending_primitive.map(|pending| pending.kind),
+            self.box_tool(),
             self.fill_arm().map(|arm| arm.class),
         );
         let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
@@ -86,6 +88,7 @@ impl Editor {
                     outcome.started_drawing = true;
                 }
                 ToolAction::CreateProductCard => outcome.open_product_card = true,
+                ToolAction::DrawProductFrame => self.arm_box(BoxOwner::Product),
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
                 ToolAction::Fill { class } => {
                     // A second click on the armed cell drops the tool; the arm is a mode, not a

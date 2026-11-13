@@ -7,8 +7,9 @@
 //! turns the draft into `product.create` and then opens the new frame as a session view operation
 //! (ADR 0098).
 //!
-//! The drawn gesture (a base rectangle and a pulled height) reaches the same command when the box
-//! tool lands (ADR 0101); this card is not a second creation path, only the typed one.
+//! The drawn gesture (a base rectangle and a pulled height) reaches the same command through the
+//! box tool, which the ribbon offers as this tool's second method (ADR 0101): the two entries build
+//! one document, and this card is not a second creation path, only the typed one.
 //!
 //! Changes when: the product frame gains a field, the class list changes how it is searched, or the
 //! numeric defaults move.

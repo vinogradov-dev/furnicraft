@@ -2,9 +2,10 @@
 //!
 //! A box is created the way the extrusion works: draw the base rectangle in the active work plane
 //! and fix it, then pull the height along the plane's normal (ADR 0101). The draft is view state
-//! until its one commit: it stores the two base corners in work-plane millimetres and the pulled
-//! height, and nothing reaches the document until `commit_box` dispatches one
-//! `object.primitive.create`. Escape costs nothing because nothing was written.
+//! until its one commit: it stores the two base corners in work-plane millimetres, the pulled height
+//! and which field will keep the three sides — a cuboid's primitive or a product's envelope — and
+//! nothing reaches the document until `commit_box` dispatches one command. Escape costs nothing
+//! because nothing was written.
 //!
 //! The base rectangle names the box's own frame: its minimum corner in the plane becomes the node's
 //! origin, its sides become width and depth, and the normal becomes the height, so the space the box
@@ -63,8 +64,10 @@ pub struct BoxBase {
 }
 
 /// The base rectangle being drawn and the height pulled from it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoxDraft {
+    /// What the three sides become: a solid's primitive or a frame's envelope.
+    owner: BoxOwner,
     /// The first corner, once it is clicked.
     first: Option<[Length; 2]>,
     /// The corner a second click would fix the base at.
@@ -76,9 +79,14 @@ pub struct BoxDraft {
 }
 
 impl BoxDraft {
-    /// An empty draft, waiting for the first corner of the base.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty draft for one owner, waiting for the first corner of the base.
+    pub fn new(owner: BoxOwner) -> Self {
+        Self { owner, first: None, live: None, base: None, height: Length::ZERO }
+    }
+
+    /// What the three sides of this box become.
+    pub const fn owner(&self) -> BoxOwner {
+        self.owner
     }
 
     /// The first corner of the base, when it is already on the plane.
@@ -189,7 +197,7 @@ mod tests {
 
     #[test]
     fn the_first_click_anchors_and_the_second_fixes_the_base() {
-        let mut draft = BoxDraft::new();
+        let mut draft = BoxDraft::new(BoxOwner::Cuboid);
         assert!(!draft.click(point(600, 400)).expect("the anchor"), "the first click only anchors");
         assert_eq!(draft.first(), Some(point(600, 400)));
         assert!(draft.click(point(0, 0)).expect("the base"), "the second click fixes the base");
@@ -201,7 +209,7 @@ mod tests {
 
     #[test]
     fn a_flat_base_is_refused_and_the_draft_waits() {
-        let mut draft = BoxDraft::new();
+        let mut draft = BoxDraft::new(BoxOwner::Cuboid);
         draft.click(point(100, 100)).expect("the anchor");
         assert_eq!(draft.click(point(400, 100)), Err(BoxDraftError::FlatBase), "no depth is no box");
         assert!(!draft.is_pulling(), "the base stays unfixed");
@@ -211,7 +219,7 @@ mod tests {
 
     #[test]
     fn the_height_rounds_to_whole_millimetres_and_never_reaches_zero() {
-        let mut draft = BoxDraft::new();
+        let mut draft = BoxDraft::new(BoxOwner::Cuboid);
         draft.click(point(0, 0)).expect("anchor");
         draft.click(point(600, 400)).expect("base");
         assert_eq!(draft.sizes(), Some([millimetres(600), millimetres(400), Length::ZERO]), "no height yet");
@@ -226,7 +234,7 @@ mod tests {
 
     #[test]
     fn a_height_before_the_base_is_refused() {
-        let mut draft = BoxDraft::new();
+        let mut draft = BoxDraft::new(BoxOwner::Cuboid);
         assert_eq!(draft.set_height(millimetres(720)), Err(BoxDraftError::NoBase));
         assert_eq!(draft.sizes(), None);
     }

@@ -23,13 +23,14 @@ use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ClassCode, Contour, Id, LightKind, MaterialId, PanelNominalSize, Placement, Primitive, Project,
+    CameraProjection, ClassCode, Contour, Envelope, Id, LightKind, MaterialId, PanelNominalSize, Placement, Primitive,
+    Project,
 };
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
-use crate::box_tool::{BoxDraft, BoxDraftError};
+use crate::box_tool::{BoxDraft, BoxDraftError, BoxOwner};
 use crate::command::{dispatch, json};
 use crate::product_card::ProductDraft;
 use crate::target::creation_target;
@@ -203,7 +204,7 @@ impl Editor {
     /// height instead (ADR 0101).
     pub(super) fn arm_primitive(&mut self, kind: PrimitiveKind, size: Length) -> Result<(), String> {
         if kind == PrimitiveKind::Cuboid {
-            self.arm_box();
+            self.arm_box(BoxOwner::Cuboid);
             return Ok(());
         }
         if size.micrometres() <= 0 {
@@ -214,13 +215,15 @@ impl Editor {
         Ok(())
     }
 
-    /// Arms the box tool: the next clicks draw its base rectangle and pull its height.
+    /// Arms the box tool for one owner: the next clicks draw its base rectangle and pull its height.
     ///
     /// A box has three independent sides, so it is drawn rather than placed by one click from one
-    /// extent (ADR 0101). Arming drops the other pointer modes but writes nothing.
-    pub fn arm_box(&mut self) {
+    /// extent (ADR 0101). The owner is the field the ✓ will write — a cuboid's primitive or a
+    /// product's envelope — so one gesture serves both and the shell reads the draft, not the tool.
+    /// Arming drops the other pointer modes but writes nothing.
+    pub fn arm_box(&mut self, owner: BoxOwner) {
         self.leave_pointer_modes();
-        self.box_draft = Some(BoxDraft::new());
+        self.box_draft = Some(BoxDraft::new(owner));
     }
 
     /// Drops every pointer mode a creation tool replaces.
@@ -243,9 +246,9 @@ impl Editor {
         self.box_draft.as_ref()
     }
 
-    /// The kind the box tool would build, while its draft lives; this is what arms the ribbon cell.
-    pub fn box_tool(&self) -> Option<PrimitiveKind> {
-        self.box_draft.as_ref().map(|_| PrimitiveKind::Cuboid)
+    /// The owner the box tool would write, while its draft lives; this is what arms the ribbon cell.
+    pub fn box_tool(&self) -> Option<BoxOwner> {
+        self.box_draft.as_ref().map(BoxDraft::owner)
     }
 
     /// The corner the live base rectangle runs to.
@@ -291,23 +294,69 @@ impl Editor {
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
     }
 
-    /// Creates the box the draft describes through one `object.primitive.create`.
+    /// Creates the box the draft describes through one command, chosen by its owner.
     ///
     /// `placement` is the work plane's *world* frame with its origin on the base rectangle's
     /// minimum corner, so the box's own zero is that corner; the command stores the placement
-    /// relative to the parent. The mesh, the card and the scene tree then read the three sides the
-    /// user drew, and the whole gesture is one undo entry.
-    pub fn commit_box(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
-        let Some(sizes) = self.box_draft.and_then(|draft| draft.sizes()) else {
+    /// relative to the parent. A solid goes to `object.primitive.create`; a frame goes to
+    /// `product.create` at the scene root with the placeholder class, exactly as the card's create
+    /// does, and is opened for its parts (ADR 0098, ADR 0101). The whole gesture is one undo entry.
+    pub fn commit_box(&mut self, session: &mut Session, placement: Placement, lang: Lang) -> Result<Id, String> {
+        let Some(draft) = self.box_draft else {
             return Err(BoxDraftError::NoBase.to_string());
         };
-        let [width, depth, height] = sizes;
-        let primitive = Primitive::cuboid(width, depth, height).map_err(|error| error.to_string())?;
-        let parent = self.creation_target(session.project());
-        let placement = session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
-        self.create_primitive_node(session, parent, primitive, placement)?;
+        let Some([width, depth, height]) = draft.sizes() else {
+            return Err(BoxDraftError::NoBase.to_string());
+        };
+        match draft.owner() {
+            BoxOwner::Cuboid => {
+                let primitive = Primitive::cuboid(width, depth, height).map_err(|error| error.to_string())?;
+                let parent = self.creation_target(session.project());
+                let placement =
+                    session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
+                self.create_primitive_node(session, parent, primitive, placement)?;
+            }
+            BoxOwner::Product => {
+                // A frame is a top-level piece: its parent is the root whatever container is armed.
+                let parent = session.project().root().id();
+                let placement =
+                    session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
+                self.create_drawn_product(session, parent, [width, depth, height], placement, lang)?;
+            }
+        }
         self.box_draft = None;
-        self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
+        self.selection.primary().ok_or_else(|| "The box command created no node.".to_owned())
+    }
+
+    /// Dispatches `product.create` for a frame drawn in the viewport, then opens it.
+    ///
+    /// The class is the registry's general-product placeholder, because a drawn gesture names no
+    /// type; the card is the entry that does. The name is that class's label in the current
+    /// language, the same name the card gives when its class is left alone, so the card and the
+    /// gesture produce the same document. Opening the new frame is a session view operation that
+    /// follows the command, exactly as it does from the card (ADR 0098, ADR 0100).
+    fn create_drawn_product(
+        &mut self,
+        session: &mut Session,
+        parent: Id,
+        sizes: [Length; 3],
+        placement: Placement,
+        lang: Lang,
+    ) -> Result<(), String> {
+        let [width, depth, height] = sizes;
+        let envelope = Envelope::new(width, depth, height).map_err(|error| error.to_string())?;
+        let class = ProductCreate::PLACEHOLDER_CLASS;
+        let name = class.label().map_or_else(|| Message::CmdCreateProduct.text(lang), |label| label.text(lang));
+        let params = json(&ProductCreate { parent, name: name.to_owned(), class: Some(class), envelope, placement })?;
+        let outcome = dispatch(session, PRODUCT_CREATE_ID, &params)?;
+        let Some(id) = outcome.created_id() else {
+            return Ok(());
+        };
+        session.open_product(id);
+        self.arm_creation(session.project(), id);
+        self.selection.replace(id);
+        self.initialized = true;
+        Ok(())
     }
 
     /// Dispatches `object.primitive.create` for one validated primitive at `placement`.

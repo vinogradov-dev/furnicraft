@@ -44,6 +44,7 @@ use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use self::spec::{GroupSpec, TabSpec, ToolKind, ToolSpec};
+use crate::box_tool::BoxOwner;
 use crate::draw::DrawTool;
 use crate::icons::{self, Icon};
 use crate::theme::{RIBBON_CAPTION_HEIGHT, RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT, RIBBON_RULE, RIBBON_TAB_HEIGHT};
@@ -78,6 +79,9 @@ pub enum ToolAction {
     },
     /// Opens the product-frame card; the card dispatches `product.create`.
     CreateProductCard,
+    /// Arms the box tool with the frame as its owner: the next clicks draw the reserved box and the
+    /// ✓ dispatches `product.create`.
+    DrawProductFrame,
     /// Creates a panel at the scene root.
     CreatePanel,
     /// Arms the empty-space tool with the class whose `fill` trait picks the axis pair.
@@ -133,34 +137,40 @@ pub const CONTOUR_TOOLS: [DrawTool; 10] = [
 
 /// The tool that owns the next pointer events, drawn as pressed on the strip.
 ///
-/// Only the two arming tools have a state to show: a drawing tool holds the pointer until the chain
-/// is committed, and a primitive waits for its work-plane click. A one-shot creation — a panel, an
-/// assembly, a camera or a light — runs and forgets, so it is never armed.
+/// Only the arming tools have a state to show: a drawing tool holds the pointer until the chain is
+/// committed, a primitive waits for its work-plane click and a box waits for its base rectangle. A
+/// one-shot creation — a panel, an assembly, a camera or a light — runs and forgets, so it is never
+/// armed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolActivity {
     /// A drawing tool is building a chain.
     Draw(DrawTool),
     /// A primitive is waiting for its work-plane click.
     Primitive(PrimitiveKind),
+    /// The box tool is drawing a product frame's reserved box.
+    ProductFrame,
     /// The empty-space tool is armed with a fill class.
     Fill(ClassCode),
 }
 
 /// The activity whose button is pressed, from what the editor holds.
 ///
-/// The arguments are the three sources of an armed tool, not a decision: a running draft names its
-/// tool, a pending primitive names its kind and a fill arm names its class, and none outranks
-/// another because the editor never holds two at once.
+/// The arguments are the sources of an armed tool, not a decision: a running draft names its tool, a
+/// pending primitive names its kind, a box draft names the field it will write and a fill arm names
+/// its class. None outranks another because the editor never holds two at once.
 pub fn tool_activity(
     drawing: Option<DrawTool>,
     primitive: Option<PrimitiveKind>,
+    box_owner: Option<BoxOwner>,
     fill: Option<ClassCode>,
 ) -> Option<ToolActivity> {
-    match (drawing, primitive, fill) {
-        (Some(tool), _, _) => Some(ToolActivity::Draw(tool)),
-        (None, Some(kind), _) => Some(ToolActivity::Primitive(kind)),
-        (None, None, Some(class)) => Some(ToolActivity::Fill(class)),
-        (None, None, None) => None,
+    match (drawing, primitive, box_owner, fill) {
+        (Some(tool), _, _, _) => Some(ToolActivity::Draw(tool)),
+        (None, Some(kind), _, _) => Some(ToolActivity::Primitive(kind)),
+        (None, None, Some(BoxOwner::Cuboid), _) => Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)),
+        (None, None, Some(BoxOwner::Product), _) => Some(ToolActivity::ProductFrame),
+        (None, None, None, Some(class)) => Some(ToolActivity::Fill(class)),
+        (None, None, None, None) => None,
     }
 }
 
@@ -172,6 +182,9 @@ fn is_armed(activity: Option<ToolActivity>, kind: ToolKind) -> bool {
     match (activity, kind) {
         (Some(ToolActivity::Draw(armed)), ToolKind::Draw(tool)) => armed == tool,
         (Some(ToolActivity::Primitive(armed)), ToolKind::Primitive(kind)) => armed == kind,
+        // The frame cell runs the card as its primary method, so the drawn method's row carries the
+        // pressed state and the cell shows it through the list (U74).
+        (Some(ToolActivity::ProductFrame), ToolKind::ProductDraw) => true,
         (Some(ToolActivity::Fill(armed)), ToolKind::Fill(class)) => armed == class,
         _ => false,
     }
@@ -1026,17 +1039,19 @@ mod tests {
     fn only_the_arming_tool_owns_the_next_click() {
         let post = ClassCode::VERTICAL_PANEL;
         let cases = [
-            (None, None, None, None),
-            (Some(DrawTool::Line), None, None, Some(ToolActivity::Draw(DrawTool::Line))),
-            (None, Some(PrimitiveKind::Cuboid), None, Some(ToolActivity::Primitive(PrimitiveKind::Cuboid))),
-            (None, None, Some(post), Some(ToolActivity::Fill(post))),
-            (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), None, Some(ToolActivity::Draw(DrawTool::Arc))),
+            (None, None, None, None, None),
+            (Some(DrawTool::Line), None, None, None, Some(ToolActivity::Draw(DrawTool::Line))),
+            (None, Some(PrimitiveKind::Sphere), None, None, Some(ToolActivity::Primitive(PrimitiveKind::Sphere))),
+            (None, None, Some(BoxOwner::Cuboid), None, Some(ToolActivity::Primitive(PrimitiveKind::Cuboid))),
+            (None, None, Some(BoxOwner::Product), None, Some(ToolActivity::ProductFrame)),
+            (None, None, None, Some(post), Some(ToolActivity::Fill(post))),
+            (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), None, None, Some(ToolActivity::Draw(DrawTool::Arc))),
         ];
-        for (drawing, primitive, fill, expected) in cases {
+        for (drawing, primitive, box_owner, fill, expected) in cases {
             assert_eq!(
-                tool_activity(drawing, primitive, fill),
+                tool_activity(drawing, primitive, box_owner, fill),
                 expected,
-                "drawing={drawing:?} primitive={primitive:?} fill={fill:?}"
+                "drawing={drawing:?} primitive={primitive:?} box={box_owner:?} fill={fill:?}"
             );
         }
     }
@@ -1051,6 +1066,9 @@ mod tests {
             (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Primitive(PrimitiveKind::Cuboid), true),
             (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Primitive(PrimitiveKind::Sphere), false),
             (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Light, false),
+            (Some(ToolActivity::ProductFrame), ToolKind::ProductDraw, true),
+            (Some(ToolActivity::ProductFrame), ToolKind::Product, false),
+            (Some(ToolActivity::ProductFrame), ToolKind::Primitive(PrimitiveKind::Cuboid), false),
         ];
         for (activity, kind, expected) in cases {
             assert_eq!(is_armed(activity, kind), expected, "activity={activity:?} kind={kind:?}");

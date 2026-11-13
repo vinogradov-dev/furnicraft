@@ -996,7 +996,7 @@ impl Document {
                 }
             }
             Some(BoxEvent::Commit) => {
-                if let Err(error) = self.finish_box() {
+                if let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx())) {
                     self.last_error = Some(error);
                 }
             }
@@ -1043,9 +1043,11 @@ impl Document {
     }
 
     /// Commits the box the pull shows; idempotent, because the committed gesture leaves no draft.
-    pub(crate) fn finish_box(&mut self) -> Result<(), String> {
+    ///
+    /// `lang` names the frame a drawn product frame becomes, as the card's create does.
+    pub(crate) fn finish_box(&mut self, lang: furnicraft_text::Lang) -> Result<(), String> {
         let plane = WorkPlane::from_camera(self.scene.camera);
-        box_gizmo::commit_box(&mut self.session, &mut self.editor, plane)?;
+        box_gizmo::commit_box(&mut self.session, &mut self.editor, plane, lang)?;
         self.refresh()
     }
 
@@ -1383,11 +1385,17 @@ impl Document {
         };
         let mut millimetres = height.millimetres_f64();
         let maximum = box_gizmo::MAX_SIDE_MM as f64;
+        // A frame's pull is the height it reserves, not a solid's edge: the bar says which box it
+        // is sizing (ADR 0101).
+        let label = match self.editor.box_tool() {
+            Some(furnicraft_ui::BoxOwner::Product) => Message::FrameHeight,
+            Some(furnicraft_ui::BoxOwner::Cuboid) | None => Message::BoxHeight,
+        };
         let outcome = command_bar::show(
             ui,
             viewport,
             CommandBar {
-                label: Message::BoxHeight,
+                label,
                 value: &mut millimetres,
                 unit: "mm",
                 range: box_gizmo::MIN_SIDE_MM as f64..=maximum,
@@ -1406,7 +1414,7 @@ impl Document {
         }
         match outcome.action {
             Some(CommandBarAction::Apply) => {
-                if let Err(error) = self.finish_box() {
+                if let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx())) {
                     self.last_error = Some(error);
                 }
             }
@@ -2573,7 +2581,7 @@ impl Document {
             } else if enter
                 && !ui.ctx().text_edit_focused()
                 && self.editor.box_draft().is_some_and(BoxDraft::is_pulling)
-                && let Err(error) = self.finish_box()
+                && let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx()))
             {
                 self.last_error = Some(error);
             }

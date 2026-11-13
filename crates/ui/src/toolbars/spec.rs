@@ -45,6 +45,8 @@ pub enum ToolKind {
     Extrude,
     /// Opens the card that creates a product frame.
     Product,
+    /// Draws the product frame's reserved box: base rectangle, then height, then `product.create`.
+    ProductDraw,
     /// Creates a panel at the scene root.
     Panel,
     /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair.
@@ -666,7 +668,15 @@ const FURNITURE: [GroupSpec; 6] = [
             shortcut: None,
             run: Some(ToolKind::Product),
             method: None,
-            variants: &[],
+            // The card is the numeric method and the drawn box the pointer method; the split cell
+            // runs whichever the workspace pinned (U74, ADR 0101).
+            variants: &[VariantSpec {
+                id: "furniture.product.frame.draw",
+                label: Message::ToolProductFrameDraw,
+                icon: Some(icons::scene::PRODUCT),
+                run: Some(ToolKind::ProductDraw),
+                section: None,
+            }],
         }],
     },
     GroupSpec {
@@ -1017,12 +1027,35 @@ mod tests {
     }
 
     #[test]
+    fn the_frame_cell_offers_the_card_and_the_drawn_method() {
+        let frame = tab("furniture")
+            .expect("furniture")
+            .live_groups()
+            .flat_map(GroupSpec::live_tools)
+            .find(|tool| tool.id == "furniture.product.frame")
+            .expect("the frame cell");
+        let methods: Vec<_> = frame.methods().map(|method| (method.id, method.run)).collect();
+        assert_eq!(
+            methods,
+            vec![
+                ("furniture.product.frame", Some(ToolKind::Product)),
+                ("furniture.product.frame.draw", Some(ToolKind::ProductDraw)),
+            ],
+            "the card is the tool's own method, the drawn box its second (ADR 0101)"
+        );
+        let drawn = frame.variants.first().expect("the drawn method");
+        assert_eq!(drawn.label.text(furnicraft_text::Lang::En), "Frame by drawing");
+        assert!(drawn.run.is_some(), "the split cell only offers a method that runs");
+    }
+
+    #[test]
     fn every_tool_kind_appears_exactly_once() {
         let kinds = [
             ToolKind::CloseDraft,
             ToolKind::CancelDraft,
             ToolKind::Extrude,
             ToolKind::Product,
+            ToolKind::ProductDraw,
             ToolKind::Panel,
             ToolKind::Fill(ClassCode::VERTICAL_PANEL),
             ToolKind::Fill(ClassCode::HORIZONTAL_PANEL),
