@@ -384,6 +384,9 @@ pub struct DistanceFields {
     /// Escape handed the part back to the pointer: no field takes the keyboard again until the
     /// maker clicks one or a new gesture starts.
     suspended: bool,
+    /// The egui focus id of the field that held the keyboard, so a vanishing overlay can give it
+    /// back instead of leaving every shortcut behind a field nobody can see.
+    focused_id: Option<Id>,
 }
 
 impl DistanceFields {
@@ -395,6 +398,21 @@ impl DistanceFields {
     /// Forgets the fields, their error, their focus and the suspended state, for example when the
     /// tool disarms or a part was created.
     pub fn reset(&mut self) {
+        self.focus = None;
+        self.error = None;
+        self.suspended = false;
+        self.focused_id = None;
+    }
+
+    /// Hides the overlay and gives the keyboard focus back to the window.
+    ///
+    /// A field that vanishes while focused would leave `text_edit_focused` true, and every shortcut
+    /// behind it would be dead until a click somewhere else; the gesture ends by handing the focus
+    /// to nobody.
+    pub fn dismiss(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.focused_id.take() {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
         self.focus = None;
         self.error = None;
         self.suspended = false;
@@ -493,6 +511,7 @@ impl DistanceFields {
                                     .show(ui);
                                 if field.response.has_focus() {
                                     focused = Some(side);
+                                    self.focused_id = Some(field.response.id);
                                 }
                                 if field.commit {
                                     match state.place(side, value) {

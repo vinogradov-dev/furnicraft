@@ -301,6 +301,8 @@ pub(crate) struct Document {
     pub(crate) distances: Option<Distances>,
     /// The plates the fields drew last frame, so a press on one is chrome and never a pick.
     pub(crate) distance_rects: Vec<egui::Rect>,
+    /// The exact distances of the translate drag in progress, measured once when it starts.
+    move_distances: Option<MoveDistances>,
     /// The corner orientation widget, which owns the roll-ring drag across frames.
     gizmo: gizmo::Gizmo,
     highlighted: Vec<Id>,
@@ -381,6 +383,7 @@ impl Document {
             distance_fields: DistanceFields::default(),
             distances: None,
             distance_rects: Vec::new(),
+            move_distances: None,
             gizmo: gizmo::Gizmo::default(),
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -956,18 +959,18 @@ impl Document {
         opacity: u32,
     ) {
         let Some(arm) = arm else {
-            self.reset_fill();
+            self.reset_fill(ui.ctx());
             return;
         };
         let Some(product) = self.session.active_product() else {
             // A closed, deleted or undone product ends the tool: a niche is only offered inside the
             // open piece (ADR 0098), so the arm would have nothing to point at.
             self.editor.cancel_fill();
-            self.reset_fill();
+            self.reset_fill(ui.ctx());
             return;
         };
         let Some(thickness) = self.fill_thickness() else {
-            self.reset_fill();
+            self.reset_fill(ui.ctx());
             return;
         };
         // A press or a hover on a field is chrome, so the viewport's own response calls it a miss;
@@ -989,7 +992,7 @@ impl Document {
                 .filter(|pointer| on_field(*pointer))
                 .and_then(|_| self.fill_gizmo.measured_point())
         }) else {
-            self.reset_fill();
+            self.reset_fill(ui.ctx());
             return;
         };
         // A number typed into a field pins the free position; the pointer drives it otherwise.
@@ -1065,9 +1068,9 @@ impl Document {
     }
 
     /// Drops the empty-space ghost and the exact-distance fields that measured it.
-    fn reset_fill(&mut self) {
+    fn reset_fill(&mut self, ctx: &egui::Context) {
         self.fill_gizmo.reset();
-        self.distance_fields.reset();
+        self.distance_fields.dismiss(ctx);
         self.distances = None;
         self.distance_rects.clear();
     }
@@ -1077,6 +1080,92 @@ impl Document {
         response
             .interact_pointer_pos()
             .is_some_and(|pointer| self.distance_rects.iter().any(|rect| rect.contains(pointer)))
+    }
+
+    /// The world distance a typed move distance has fixed, relative to the drag's start.
+    fn move_pinned(&self) -> Option<f64> {
+        let measure = self.move_distances.as_ref()?;
+        let low = measure.distances.pinned_low()?;
+        Some(low - measure.start_low)
+    }
+
+    /// Measures the moving box and the two surfaces along the drag axis, once per drag.
+    fn measure_move(&self, node: Id, axis: gizmo_math::Axis) -> Option<MoveDistances> {
+        measure_move(self.session.project(), node, axis)
+    }
+
+    /// Draws the exact-distance fields of the translate drag and reads their numbers.
+    fn show_move_distances(&mut self, ui: &mut egui::Ui, rect: egui::Rect, opacity: u32) {
+        let (Some(axis), Some(node)) = (self.translate_gizmo.axis(), self.translate_gizmo.anchor()) else {
+            self.clear_move_distances(ui.ctx());
+            return;
+        };
+        if !self.translate_gizmo.exact_axis() {
+            self.clear_move_distances(ui.ctx());
+            return;
+        }
+        if self.move_distances.as_ref().is_none_or(|measured| measured.node != node || measured.axis != axis) {
+            self.distance_fields.dismiss(ui.ctx());
+            self.move_distances = self.measure_move(node, axis);
+        }
+        let Some(measure) = self.move_distances.as_mut() else {
+            self.distance_rects.clear();
+            return;
+        };
+        let direction = axis.direction();
+        let delta = self.translate_gizmo.drag_delta().dot(direction);
+        let low = measure.start_low + delta;
+        let high = low + measure.extent;
+        measure.distances.sync(measure.wall_low, measure.wall_high, low, high);
+        let low_face = measure.low_face + direction * delta;
+        let high_face = measure.high_face + direction * delta;
+        // The walls stay where the start measurement found them; only the faces travel.
+        let low_wall_point = measure.wall_low.map(|wall| measure.low_face + direction * (wall - measure.start_low));
+        let high_wall_point =
+            measure.wall_high.map(|wall| measure.high_face + direction * (wall - (measure.start_low + measure.extent)));
+        let painter = ui.painter().with_clip_rect(rect);
+        let mut placements = Vec::new();
+        for (side, face, wall_point) in
+            [(Side::Low, low_face, low_wall_point), (Side::High, high_face, high_wall_point)]
+        {
+            let middle = wall_point.map_or(face, |wall_point| {
+                let (Some(face_screen), Some(wall_screen)) = (
+                    gizmo_math::screen_point(self.scene.camera, rect, face),
+                    gizmo_math::screen_point(self.scene.camera, rect, wall_point),
+                ) else {
+                    return face;
+                };
+                painter.line_segment(
+                    [face_screen, wall_screen],
+                    egui::Stroke::new(1.0, furnicraft_ui::theme::text_dim(ui)),
+                );
+                (face + wall_point) * 0.5
+            });
+            let Some(middle_screen) = gizmo_math::screen_point(self.scene.camera, rect, middle) else {
+                continue;
+            };
+            let position = egui::Pos2::new(
+                middle_screen.x.clamp(rect.left() + 90.0, (rect.right() - 90.0).max(rect.left() + 90.0)),
+                middle_screen.y.clamp(rect.top() + 26.0, (rect.bottom() - 26.0).max(rect.top() + 26.0)),
+            );
+            placements.push(FieldPlacement { side, position });
+        }
+        let outcome = self.distance_fields.show(ui, &mut measure.distances, &placements, opacity);
+        self.distance_rects = outcome.rects;
+        if let Some(message) = self.distance_fields.error() {
+            self.last_error = Some(message.text(furnicraft_ui::language(ui.ctx())).to_owned());
+        }
+        if outcome.changed {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Drops the translate drag's measurement and its fields.
+    fn clear_move_distances(&mut self, ctx: &egui::Context) {
+        if self.move_distances.take().is_some() {
+            self.distance_fields.dismiss(ctx);
+            self.distance_rects.clear();
+        }
     }
 
     /// The thickness a filled part takes: the catalogue's first panel material.
@@ -1544,7 +1633,7 @@ impl Document {
                 match self.create_fill(furnicraft_ui::language(ui.ctx())) {
                     Ok(()) => {
                         // The next void is a fresh gesture: its fields may take the keyboard again.
-                        self.distance_fields.reset();
+                        self.distance_fields.dismiss(ui.ctx());
                         self.distances = None;
                         self.distance_rects.clear();
                     }
@@ -1552,7 +1641,7 @@ impl Document {
                 }
             }
         } else {
-            self.reset_fill();
+            self.reset_fill(ui.ctx());
         }
 
         let target = gizmo_math::Target {
@@ -1577,7 +1666,10 @@ impl Document {
             Ok(None)
         } else {
             match shell.mode {
-                TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+                TransformMode::Move => {
+                    let pinned = self.move_pinned();
+                    self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget, pinned)
+                }
                 TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
             }
         };
@@ -1589,6 +1681,11 @@ impl Document {
             }
             Ok(None) => {}
             Err(error) => self.last_error = Some(error),
+        }
+        if shell.mode == TransformMode::Move && self.translate_gizmo.is_dragging() {
+            self.show_move_distances(ui, rect, opacity);
+        } else {
+            self.clear_move_distances(ui.ctx());
         }
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
@@ -2298,7 +2395,7 @@ impl Document {
                 // Escape leaves the empty-space tool before it leaves a container level: the tool is
                 // the mode the next click uses.
                 self.editor.cancel_fill();
-                self.reset_fill();
+                self.reset_fill(ui.ctx());
             } else if self.editor.creation_parent().is_some() {
                 // The arm outranks leaving a container level: it is the mode the next creation uses,
                 // and the chip names it until Escape or ✕ clears it (ADR 0056).
@@ -2381,6 +2478,65 @@ fn viewport_owns_view(project: &Project) -> bool {
 /// click to the scene.
 fn widget_placement(cluster: &ViewCluster, view: egui::Rect, chrome: &Chrome) -> Option<egui::Rect> {
     if cluster.widget_visible() { gizmo::widget_rect(view, chrome) } else { None }
+}
+
+/// The exact distances of one translate drag, measured once when the drag starts.
+///
+/// The walls and the start faces are snapshots: the document still holds the start placements, so
+/// the preview, the fields and the release read one measurement (ADR 0103).
+#[derive(Clone, Copy, Debug)]
+struct MoveDistances {
+    /// The anchor node the measurement was taken on.
+    node: Id,
+    /// The world axis the drag runs along.
+    axis: gizmo_math::Axis,
+    /// The low face's world coordinate along the axis at the drag start.
+    start_low: f64,
+    /// The moved box's extent along the axis.
+    extent: f64,
+    /// The world centres of the two start faces.
+    low_face: furnicraft_geom::DVec3,
+    high_face: furnicraft_geom::DVec3,
+    /// The surfaces that stop the two faces, in the axis's world coordinates.
+    wall_low: Option<f64>,
+    wall_high: Option<f64>,
+    /// The measurement the fields draw and the numbers they pin.
+    distances: Distances,
+}
+
+/// Measures the moving box and the two surfaces along a drag axis (ADR 0103).
+///
+/// A translate drag reads this once, when it starts: the document still holds the start placements,
+/// so the preview, the fields and the release commit one measurement.
+fn measure_move(project: &Project, node: Id, axis: gizmo_math::Axis) -> Option<MoveDistances> {
+    let (min, max) = project.world_box(node)?;
+    let direction = axis.direction();
+    let (low, high) = (min.dot(direction), max.dot(direction));
+    if !(low.is_finite() && high.is_finite()) || high <= low {
+        return None;
+    }
+    // The face centres, which is where the probe and the field anchors sit.
+    let centre = (min + max) * 0.5;
+    let low_face = centre - direction * (centre.dot(direction) - low);
+    let high_face = centre + direction * (high - centre.dot(direction));
+    // A probe starting exactly on a face can meet that face; one micrometre outside it cannot.
+    const INSET_MM: f64 = 1.0e-3;
+    let wall_low =
+        project.probe(low_face - direction * INSET_MM, -direction).map(|probe| low - INSET_MM - probe.distance_mm);
+    let wall_high =
+        project.probe(high_face + direction * INSET_MM, direction).map(|probe| high + INSET_MM + probe.distance_mm);
+    let distances = Distances::new(wall_low, wall_high, low, high)?;
+    Some(MoveDistances {
+        node,
+        axis,
+        start_low: low,
+        extent: high - low,
+        low_face,
+        high_face,
+        wall_low,
+        wall_high,
+        distances,
+    })
 }
 
 /// The world axis a product-frame axis index names.
@@ -2522,13 +2678,42 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_geom::{DMat4, DQuat, DVec3};
-    use furnicraft_model::{CameraProjection, LightKind};
+    use furnicraft_model::{CameraProjection, ClassCode, Container, Envelope, LightKind};
     use furnicraft_scene::Projection;
     use furnicraft_testkit::{millimetres, sample_project};
 
     use super::*;
     use crate::icons;
     use crate::view_cluster::projection_button;
+
+    #[test]
+    fn a_typed_move_distance_pins_the_gap_to_the_next_surface() {
+        // Two 600 mm pieces stand 400 mm apart: the probe finds the right wall and nothing on the
+        // left, so one field is live and one is disabled.
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("an empty project");
+        let root_id = project.root().id();
+        let envelope = || Envelope::new(millimetres(600), millimetres(600), millimetres(600)).expect("a box");
+        let moved = project
+            .add_product(root_id, "Moved", ClassCode::GENERAL_PRODUCT, envelope(), Placement::IDENTITY)
+            .expect("a product");
+        let beside = Placement::new(DVec3::new(1000.0, 0.0, 0.0), DQuat::IDENTITY).expect("a placement");
+        project
+            .add_product(root_id, "Beside", ClassCode::GENERAL_PRODUCT, envelope(), beside)
+            .expect("a second product");
+        let measure = measure_move(&project, moved, gizmo_math::Axis::X).expect("two faces");
+        assert_eq!(measure.start_low, 0.0);
+        assert_eq!(measure.extent, 600.0);
+        assert_eq!(measure.wall_low, None, "nothing stands to the left");
+        let wall_high = measure.wall_high.expect("the second piece is the right wall");
+        assert!((wall_high - 1000.0).abs() < 1.0e-6, "the shell face is the surface: {wall_high}");
+        let mut distances = measure.distances;
+        assert_eq!(distances.value(Side::High), Some(400.0));
+        distances.place(Side::High, 100.0).expect("the piece fits the gap");
+        assert!((distances.low() - 300.0).abs() < 1.0e-9, "{:?}", distances.low());
+        let pinned = distances.pinned_low().expect("the typed distance pins the low face");
+        assert!((pinned - measure.start_low - 300.0).abs() < 1.0e-9, "the drag delta is the typed gap");
+    }
 
     #[test]
     fn a_cheap_rebuild_is_never_announced() {

@@ -80,11 +80,41 @@ impl TranslateGizmo {
         })
     }
 
+    /// The world axis of the drag in progress, if any.
+    pub(crate) fn axis(&self) -> Option<Axis> {
+        self.drag.as_ref().map(|drag| drag.axis)
+    }
+
+    /// The node whose pivot anchors the drag.
+    pub(crate) fn anchor(&self) -> Option<Id> {
+        self.drag.as_ref().map(|drag| drag.node)
+    }
+
+    /// The world distance the drag has travelled so far.
+    pub(crate) fn drag_delta(&self) -> DVec3 {
+        self.drag.as_ref().map_or(DVec3::ZERO, |drag| drag.delta)
+    }
+
+    /// Whether the drag's axis may carry a typed distance.
+    ///
+    /// A floor-bound product keeps its height, so the vertical axis has no free distance to state;
+    /// the fields are not offered there.
+    pub(crate) fn exact_axis(&self) -> bool {
+        match self.drag.as_ref() {
+            Some(drag) => drag.rule.as_ref().is_none_or(|rule| rule.allows(drag.axis.move_axis())),
+            None => false,
+        }
+    }
+
     /// Starts, continues or finishes a drag and returns a placement to dispatch on release.
     ///
     /// `pointer_over_widget` is true when the pointer is over the orientation widget, which owns
     /// its own clicks. The caller must run this before camera orbit and discard the pointer's click
     /// when [`Self::consumed_click`] is true.
+    ///
+    /// `pinned` is a distance the exact-distance fields fixed in world millimetres. It replaces the
+    /// pointer for the frame, so typing a number takes the mouse out of the drag without ending it,
+    /// and the release still commits the pinned distance as the one undo entry (ADR 0103).
     pub(crate) fn update(
         &mut self,
         ui: &Ui,
@@ -92,25 +122,33 @@ impl TranslateGizmo {
         viewport: egui::Rect,
         target: Target<'_>,
         pointer_over_widget: bool,
+        pinned: Option<f64>,
     ) -> Result<Option<PlacementCommit>, String> {
         self.consumed_click = false;
         if let Some(mut drag) = self.drag.take() {
             let (pointer, down, escape) = ui.input(|input| {
                 (input.pointer.latest_pos(), input.pointer.primary_down(), input.key_pressed(egui::Key::Escape))
             });
-            if escape {
+            // Escape belongs to the field while a number is pinned: it returns the mouse first, and
+            // the next press leaves the drag.
+            if escape && pinned.is_none() {
                 self.consumed_click = true;
                 return Ok(None);
             }
-            if let Some(pointer) = pointer
-                && let Some(parameter) = ray_to(pointer, viewport, target.camera)
-                    .closest_parameter_on_line(drag.start_origin, drag.axis.direction())
-            {
-                let scalar = (parameter - drag.start_parameter).clamp(-MAX_DISTANCE_MM, MAX_DISTANCE_MM);
-                if scalar.is_finite() {
-                    let distance = constrained_distance(drag.rule.as_ref(), drag.axis, scalar);
-                    drag.delta = drag.axis.direction() * distance;
-                }
+            let distance = match pinned {
+                Some(pinned) => pinned.is_finite().then_some(pinned),
+                None => pointer
+                    .and_then(|pointer| {
+                        ray_to(pointer, viewport, target.camera)
+                            .closest_parameter_on_line(drag.start_origin, drag.axis.direction())
+                    })
+                    .map(|parameter| {
+                        let scalar = (parameter - drag.start_parameter).clamp(-MAX_DISTANCE_MM, MAX_DISTANCE_MM);
+                        constrained_distance(drag.rule.as_ref(), drag.axis, scalar)
+                    }),
+            };
+            if let Some(distance) = distance.filter(|distance| distance.is_finite()) {
+                drag.delta = drag.axis.direction() * distance;
             }
             if !down {
                 self.consumed_click = true;

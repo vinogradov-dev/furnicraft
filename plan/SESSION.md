@@ -5,10 +5,10 @@ task: N8
 goal: the exact-distance fields: type a distance, lock it, centre it, with the keyboard
 
 steps:
-  [ ] wire the translate gizmo's drag to the distance fields
+  [ ] check the gate and close N8
 
-now: wire the translate gizmo's drag to the distance fields
+now: check the gate and close N8
 blocked: nothing
-run: cargo test -p furnicraft --bin furnicraft N8
-resume: the fill gesture and the overlay are done; Project::world_box and TranslateGizmo::set_delta are next
+run: cargo xtask ci N8
+resume: the overlay, the fill and the move are done; run the gate, then close
 ```

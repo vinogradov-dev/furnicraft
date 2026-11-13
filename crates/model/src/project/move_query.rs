@@ -106,6 +106,15 @@ impl Project {
         targets.iter().filter_map(|id| self.mover_box(*id)).collect()
     }
 
+    /// The world axis-aligned box a node occupies, in millimetres.
+    ///
+    /// It is the same box the move rule measures: a product's envelope, a panel's or object's own
+    /// bounds, and for any other container the union of its parts. The distance fields of a drag
+    /// read it, so the number they show and the contact the rule stops at are one measurement.
+    pub fn world_box(&self, id: Id) -> Option<(DVec3, DVec3)> {
+        self.mover_box(id).map(|surface| (surface.min, surface.max))
+    }
+
     /// The world box one moved node carries: a product's envelope, a panel's or object's own
     /// bounds, and for any other container the union of the parts below it.
     fn mover_box(&self, id: Id) -> Option<SurfaceBox> {
@@ -189,6 +198,14 @@ pub struct MoveRule {
 }
 
 impl MoveRule {
+    /// Whether a drag may move along `axis` at all.
+    ///
+    /// A floor-bound product keeps its height, so a vertical distance is never a free one; the
+    /// distance fields read this before offering a number on that axis.
+    pub const fn allows(&self, axis: MoveAxis) -> bool {
+        !(self.floor_bound && matches!(axis, MoveAxis::Z))
+    }
+
     /// The distance a proposal may travel along a world axis.
     ///
     /// The proposal is zeroed on the vertical when a moved product is floor-bound, then snapped to
@@ -419,6 +436,9 @@ mod tests {
             MoveLimit { distance_mm: 0.0, contact: None },
             "a base cabinet stands on the floor and cannot be lifted"
         );
+
+        assert!(!rule(&floor, &[floor_id]).allows(MoveAxis::Z), "the vertical axis has no free distance");
+        assert!(rule(&floor, &[floor_id]).allows(MoveAxis::X), "the floor plane stays free");
 
         let (wall, wall_id) = product_project("30.01.02");
         assert_eq!(
