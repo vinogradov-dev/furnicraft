@@ -18,7 +18,13 @@ cutting plan as a nested member and a report would measure a chair in square met
 
 `supply` gains a fourth value, **`MadeInShop`**: the object is assembled in the workshop from parts
 that carry their own classes. `measure` derives to `Count` and `nesting` to `Never` from it, exactly
-as from `BuyPiece`, and only rows with `level = Product` carry it.
+as from `BuyPiece`.
+
+Two kinds of row carry it. A row with `level = Product` does, because a piece of furniture is
+assembled rather than cut or bought. So does a *part with a recipe* — a tamburat panel of two 8 mm
+skins and rails, a bent panel, a made drawer box — because the object is one thing the program draws
+and counts and several things the shop cuts; its components are what the cutting list expands, and
+nesting the whole panel would report stock that is never cut that way.
 
 The vocabulary is therefore `sheet`, `linear`, `piece`, `shop` in the table of
 [`docs/domain/classes.md`](../domain/classes.md) §6, and `MadeFromSheet`, `MadeFromLinear`, `BuyPiece`,
@@ -27,8 +33,10 @@ The vocabulary is therefore `sheet`, `linear`, `piece`, `shop` in the table of
 ## Consequences
 
 - A report can separate three purchase channels from one assembly channel, and an export reader that
-  writes a purchase order never picks up a product (0095 ships the value in the `classes` table).
-- A product's report line is a count of pieces, never an area, and a cutting list never contains one.
+  writes a purchase order never picks up a product or a shop-made panel (0095 ships the value in the
+  `classes` table).
+- A product's and a recipe part's report line is a count of pieces, never an area, and a cutting list
+  never contains them — it contains their components.
 - The value is a promise like every other trait: a later change to it is a behaviour change for saved
   projects.
 - The other three values keep their meaning exactly; no existing row changes because no row existed.
