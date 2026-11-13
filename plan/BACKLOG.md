@@ -40,33 +40,7 @@ been reproduced. Taking it moves the line into `## Now` at its place in the work
 name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
-
 ## Bugs
-- `[ ]` **X35** a post stands on the niche's ceiling, so its first corner is at the top and edge 1 is the top edge
-  Why: The owner read the corner order off a created post and reported it upside down. The fill
-   tool stands the board with from_rotation_y(+FRAC_PI_2), which is the post stance of ADR 0105
-   turned a half-turn about the same axis: the panel's length runs downward, its zero corner —
-   the origin, a corner of the bottom face — lands on the void's ceiling, and edge 1 is the top
-   edge. Nothing looks broken until a band ordered for the top edge arrives on the bottom,
-   which is what id-addressed banding and machining exist to prevent.
-  Shape: In fill_gizmo::post stand the board in the stance — DQuat::from_rotation_y(-FRAC_PI_2)
-   — with the origin at the void's floor corner instead of its ceiling. One detail waits for
-   the owner: with the stance the panel's z = 0 face is the face at the translation and the
-   thickness runs toward -X, so either the pointer's whole-millimetre plane marks that face
-   (body toward -X, the free range starts at minimum.x + gap) or it marks the far face
-   (translation x + gap, body toward +X, which keeps today's ghost in its 18 mm band). The
-   shelf keeps the pointer's height on its own z = 0 face and grows along local +Z, so the
-   first option is the consistent one. niche.rs's angled_post helper builds the same board for
-   the probe tests and follows the stance: the face on the through line stays put, the body
-   stays behind it, so the rotation flips and the translation loses the thickness offset. The
-   height and depth spans do not change.
-  Done: A test in fill_gizmo.rs asserts the stance: the ghost's corner 1 is the bottom corner
-   of the rear edge, corner 2 is 720 mm directly above it, the panel's zero lies on the void's
-   floor, the thickness runs on the chosen side of the pointer plane, and the ghost stays
-   inside the void at both ends of the free travel. The niche and fill tests pass with the
-   updated helper and cargo xtask ci is green.
-  `files: apps/furnicraft/src/fill_gizmo.rs, crates/model/src/project/niche.rs, docs/domain/panels.md`
-
 ## Next
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
   Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
@@ -137,6 +111,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/catalog.rs`
 
 ## Done
+
+- `[x]` **X35** a post stands on the niche's ceiling, so its first corner is at the top and edge 1 is the top edge
+  Why: The owner read the corner order off a created post and reported it upside down. The fill
+   tool stands the board with from_rotation_y(+FRAC_PI_2), which is the post stance of ADR 0105
+   turned a half-turn about the same axis: the panel's length runs downward, its zero corner —
+   the origin, a corner of the bottom face — lands on the void's ceiling, and edge 1 is the top
+   edge. Nothing looks broken until a band ordered for the top edge arrives on the bottom,
+   which is what id-addressed banding and machining exist to prevent.
+  Shape: In fill_gizmo::post stand the board in the stance — DQuat::from_rotation_y(-FRAC_PI_2)
+   — with the origin at the void's floor corner instead of its ceiling. One detail waits for
+   the owner: with the stance the panel's z = 0 face is the face at the translation and the
+   thickness runs toward -X, so either the pointer's whole-millimetre plane marks that face
+   (body toward -X, the free range starts at minimum.x + gap) or it marks the far face
+   (translation x + gap, body toward +X, which keeps today's ghost in its 18 mm band). The
+   shelf keeps the pointer's height on its own z = 0 face and grows along local +Z, so the
+   first option is the consistent one. niche.rs's angled_post helper builds the same board for
+   the probe tests and follows the stance: the face on the through line stays put, the body
+   stays behind it, so the rotation flips and the translation loses the thickness offset. The
+   height and depth spans do not change.
+  Done: A test in fill_gizmo.rs asserts the stance: the ghost's corner 1 is the bottom corner
+   of the rear edge, corner 2 is 720 mm directly above it, the panel's zero lies on the void's
+   floor, the thickness runs on the chosen side of the pointer plane, and the ghost stays
+   inside the void at both ends of the free travel. The niche and fill tests pass with the
+   updated helper and cargo xtask ci is green.
+  `files: apps/furnicraft/src/fill_gizmo.rs, crates/model/src/project/niche.rs, docs/domain/panels.md` — `8abe395`
 
 - `[x]` **P13** the work order may be empty, and the plan says so instead of inventing a task
   Why: The order cannot be emptied: closing or deferring the last task in `## Now` is refused,

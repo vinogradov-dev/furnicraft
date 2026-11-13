@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=- state=idle base=bd4e70f updated=2026-11-14
+STATE: milestone=M7 phase=T task=- state=idle base=8abe395 updated=2026-11-14
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -14,8 +14,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   corner moves freely or along the picked segment (0075), a fresh extrusion pulls its height from an
   arrow previewing a wireframe prism (X19), and S5's frame rule reached a drawing, a group and a panel
   (0082, 0083), proved once in `frame_contract.rs`; cameras and lights are scene objects (0036).
-  ADR 0105 makes the shelf, the post and the wall one flat frame turned about a world axis, so the
-  first corner is the base corner (`docs/domain/panels.md` §3.1); X35 still hangs the post.
+  ADR 0105 makes the three stances one flat frame turned; X35 stands the fill post in it.
 - S7 audited the design rules and filed S8–S22 under `plan/refactor.md`: S8–S13 split `geom` and gave
   the tests one fixture definition (ADR 0084), S14–S17 `engine/panel_cmds`, `scene`'s camera and ray
   and `render`'s pipelines, S18–S19 the document rules and the `Editor` out of `ui/lib.rs` (50 lines),
