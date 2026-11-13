@@ -25,27 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **N1** the product entity: a container with a class and an authored envelope, created by a command
-  Why: Reports, the export and the creation guard all need the same answer — which piece is
-   this part in and how big is that piece — and today nothing in the document carries it. ADR
-   0097 settled the shape: a product is an ordinary container with a class of level Product and
-   an authored envelope, not a new node kind.
-  Shape: Container gains an optional Envelope (three micrometre lengths) with validation, and
-   the model refuses the two mismatches: an envelope on a container whose class is not level
-   Product, and a product class without one. node.duplicate copies it,
-   node.component.convert_to_group clears it with the class, and a product is never a
-   descendant of a product. product.create takes parent, name, class, envelope and placement,
-   and assigns the registry placeholder «изделие общего назначения» when no class is given, so
-   a product always has one. product.envelope.set edits the box and never a child size.
-   Accessors product_of(id) and products() walk the tree once; parent_id and product_id stay
-   uncomputed in the document. The schema is bumped; ADR 0096 means no migration, only a
-   regenerated golden file.
-  Done: Tests: create a product with an envelope, and one with the placeholder class; refuse an
-   envelope without a product class and a product class without an envelope; refuse a product
-   under a product; duplicate copies the envelope; convert_to_group drops both; a bad envelope
-   is a typed error; product_of returns the nearest product for a shelf two levels down; cargo
-   xtask ci is green.
-  `files: crates/model/src/container.rs, crates/model/src/class.rs, crates/model/src/project/product_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/property_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/product_cmds.rs, crates/engine/src/commands.rs`
 - `[ ]` **N2** the product frame is drawn as a dashed wireframe that never picks
   Why: The envelope is useless if nobody can see it and nobody can click it: the owner
    described the frame as a dashed wireframe that is picked to select, open and move the piece,
@@ -304,6 +283,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N1** the product entity: a container with a class and an authored envelope, created by a command
+  Why: Reports, the export and the creation guard all need the same answer — which piece is
+   this part in and how big is that piece — and today nothing in the document carries it. ADR
+   0097 settled the shape: a product is an ordinary container with a class of level Product and
+   an authored envelope, not a new node kind.
+  Shape: Container gains an optional Envelope (three micrometre lengths) with validation, and
+   the model refuses the two mismatches: an envelope on a container whose class is not level
+   Product, and a product class without one. node.duplicate copies it,
+   node.component.convert_to_group clears it with the class, and a product is never a
+   descendant of a product. product.create takes parent, name, class, envelope and placement,
+   and assigns the registry placeholder «изделие общего назначения» when no class is given, so
+   a product always has one. product.envelope.set edits the box and never a child size.
+   Accessors product_of(id) and products() walk the tree once; parent_id and product_id stay
+   uncomputed in the document. The schema is bumped; ADR 0096 means no migration, only a
+   regenerated golden file.
+  Done: Tests: create a product with an envelope, and one with the placeholder class; refuse an
+   envelope without a product class and a product class without an envelope; refuse a product
+   under a product; duplicate copies the envelope; convert_to_group drops both; a bad envelope
+   is a typed error; product_of returns the nearest product for a shelf two levels down; cargo
+   xtask ci is green.
+  `files: crates/model/src/container.rs, crates/model/src/class.rs, crates/model/src/project/product_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/property_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/product_cmds.rs, crates/engine/src/commands.rs` — `a049094`
 
 - `[x]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
   Why: Traits only matter if the program refuses what the class forbids. Without this the class

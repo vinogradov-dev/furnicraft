@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N1 state=doing base=173acb4 updated=2026-11-13
+STATE: milestone=M7 phase=T task=N2 state=idle base=a049094 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N1 puts the product into the document: a container with a class of level Product and an authored
-envelope, created by product.create, with product_of walking the tree once.
+N2 draws the product frame: the envelope of a product becomes a dashed wireframe that never picks,
+so a maker sees the space a piece reserves before any part exists.
 
 ## Index
 
