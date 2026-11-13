@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N4** the creation guard: a furniture part is created only inside the open product
-  Why: The rule "no furniture part outside an open product" is worth nothing if a palette
-   entry, a shortcut or a future assistant can bypass the button that enforces it. ADR 0098
-   therefore puts the guard in the command enabled check, where every dispatch path meets it.
-  Shape: panel.create, facade and fitting creation read session.active_product and the class
-   level: a class of level Part or Fitting is refused when no product is open or when the
-   target parent is not inside it, with one of two messages and no write. Primitives, drawn
-   figures, mesh objects and hardware models stay free. Every fixture and test that created a
-   panel under the root gains a product and an opened session, or asserts the refusal; the
-   testkit fixture grows a product so the mechanical change stays in one place.
-  Done: Tests: refuse with no product open and with a closed product; refuse when the parent is
-   outside the open product; allow when it is inside, including a nested group; a primitive
-   still creates without a product; nothing is written on a refusal and the history is
-   untouched; cargo xtask ci is green.
-  `files: crates/engine/src/commands.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/object_cmds.rs`
 - `[ ]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
   Why: The current translate tool moves anything anywhere, which is right for geometry and
    wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
@@ -242,6 +227,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N4** the creation guard: a furniture part is created only inside the open product
+  Why: The rule "no furniture part outside an open product" is worth nothing if a palette
+   entry, a shortcut or a future assistant can bypass the button that enforces it. ADR 0098
+   therefore puts the guard in the command enabled check, where every dispatch path meets it.
+  Shape: panel.create, facade and fitting creation read session.active_product and the class
+   level: a class of level Part or Fitting is refused when no product is open or when the
+   target parent is not inside it, with one of two messages and no write. Primitives, drawn
+   figures, mesh objects and hardware models stay free. Every fixture and test that created a
+   panel under the root gains a product and an opened session, or asserts the refusal; the
+   testkit fixture grows a product so the mechanical change stays in one place.
+  Done: Tests: refuse with no product open and with a closed product; refuse when the parent is
+   outside the open product; allow when it is inside, including a nested group; a primitive
+   still creates without a product; nothing is written on a refusal and the history is
+   untouched; cargo xtask ci is green.
+  `files: crates/engine/src/class_rules.rs, crates/engine/src/commands.rs, crates/engine/src/session.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/object_cmds.rs, crates/text/src/messages.rs, crates/model/src/testing.rs, crates/testkit/src/lib.rs, crates/ui/src/editor/tests.rs` — `187d42e`
 
 - `[x]` **N3** one product is open at a time, opened by a double click and never written to the file
   Why: The owner ruled that one product is open at a time and that a furniture piece is created
