@@ -129,6 +129,12 @@ impl Harness {
         self.settle()
     }
 
+    /// Moves the pointer to `pos` and lets the frame settle, so the ghost is measured before a click.
+    fn hover(&mut self, pos: egui::Pos2) {
+        self.run(vec![egui::Event::PointerMoved(pos)]);
+        self.settle();
+    }
+
     /// Drags `button` from `from` by `delta`, one frame per step.
     fn drag(&mut self, from: egui::Pos2, delta: egui::Vec2, button: egui::PointerButton) -> Chrome {
         self.press_at(from, button);
@@ -597,17 +603,20 @@ fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step()
         (product, harness.revision(), pointer)
     };
 
-    harness.click(pointer, egui::PointerButton::Primary);
+    harness.hover(pointer);
+    harness.press_at(pointer, egui::PointerButton::Primary);
+    let planned = harness.app.tabs.active().fill_gizmo.ghost().cloned().expect("the pointer measures a ghost");
+    harness.release_at(pointer, egui::PointerButton::Primary);
+    harness.settle();
 
     let created = {
         let document = harness.app.tabs.active();
-        // The ghost the click used is still on screen: it moved with the pointer, so the part that
-        // was created is exactly what the maker was looking at, not a second measurement.
-        let ghost = document.fill_gizmo.ghost().cloned().expect("the ghost that the click created");
+        // The click wrote the ghost that was on screen; the tool stays armed and measures the next
+        // part from the face under the pointer, which moved onto the part just created.
         let created = document.editor.selected_node().expect("the new part is selected");
         let panel = document.session.project().panel(created).expect("the click created a panel");
-        assert_eq!(panel.nominal_size(), ghost.nominal_size, "the part is exactly the ghost's size");
-        assert_eq!(panel.placement(), ghost.placement, "and exactly the ghost's placement");
+        assert_eq!(panel.nominal_size(), planned.nominal_size, "the part is exactly the ghost's size");
+        assert_eq!(panel.placement(), planned.placement, "and exactly the ghost's placement");
         assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
         assert_eq!(
             document.session.project().class(created),
@@ -747,17 +756,21 @@ fn a_beveled_fill_is_one_click_and_one_undo() {
         .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Shape, Lang::En)
         .expect("the shelf fill arms inside the open frame");
     let before = harness.revision();
-
-    harness.click(pointer, egui::PointerButton::Primary);
+    harness.hover(pointer);
+    harness.press_at(pointer, egui::PointerButton::Primary);
+    let planned = harness.app.tabs.active().fill_gizmo.ghost().cloned().expect("the leaned void took a ghost");
+    assert_eq!(planned.bevels.len(), 1, "the wall asks for one bevel: {:?}", planned.bevels);
+    harness.release_at(pointer, egui::PointerButton::Primary);
+    harness.settle();
 
     let document = harness.app.tabs.active();
-    let ghost = document.fill_gizmo.ghost().cloned().expect("the leaned void took a ghost");
-    assert_eq!(ghost.bevels.len(), 1, "the wall asks for one bevel: {:?}", ghost.bevels);
     let created = document.editor.selected_node().expect("the new part is selected");
     let panel = document.session.project().panel(created).expect("the click created a panel");
     assert!(panel.is_contour(), "a beveled part is a contour panel");
-    assert_eq!(panel.bevels(), ghost.bevels.as_slice(), "the stored bevels are the ghost's");
-    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(panel.bevels(), planned.bevels.as_slice(), "the stored bevels are the ghost's");
+    assert_eq!(panel.placement().rotation(), planned.placement.rotation(), "and its orientation");
+    let (stored, planned_at) = (panel.placement().translation(), planned.placement.translation());
+    assert!((stored - planned_at).length() < 1.0, "the free axis follows the pointer: {stored:?} vs {planned_at:?}");
     assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
     assert!(harness.revision() > before, "the click writes the document once");
 
@@ -778,17 +791,20 @@ fn the_shape_mode_creates_the_whole_section_as_the_ghost_draws_it() {
         .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Shape, Lang::En)
         .expect("the shelf fill arms inside the open frame");
 
-    harness.click(pointer, egui::PointerButton::Primary);
+    harness.hover(pointer);
+    harness.press_at(pointer, egui::PointerButton::Primary);
+    let planned = harness.app.tabs.active().fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
+    harness.release_at(pointer, egui::PointerButton::Primary);
+    harness.settle();
 
     let document = harness.app.tabs.active();
-    let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
-    let outline = ghost.outline.contour().cloned().expect("the ghost carries the measured polygon");
+    let outline = planned.outline.contour().cloned().expect("the ghost carries the measured polygon");
     let created = document.editor.selected_node().expect("the new part is selected");
     let panel = document.session.project().panel(created).expect("the click created a panel");
     assert!(panel.is_contour(), "the shelf takes the polygon, not the rectangle around it");
     assert_eq!(Some(&outline), panel.outline_contour(), "the stored ring is the ghost's ring");
-    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
-    assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
+    assert_eq!(panel.placement(), planned.placement, "and the ghost's placement");
+    assert_eq!(panel.nominal_size(), planned.nominal_size, "and the ghost's size");
     assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
 
     let document = harness.app.tabs.active_mut();
@@ -807,19 +823,21 @@ fn the_fit_mode_keeps_a_standard_panel_in_a_splayed_niche() {
         .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Fit, Lang::En)
         .expect("the shelf fill arms inside the open frame");
     let before = harness.revision();
-
-    harness.click(pointer, egui::PointerButton::Primary);
+    harness.hover(pointer);
+    harness.press_at(pointer, egui::PointerButton::Primary);
+    let planned = harness.app.tabs.active().fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
+    assert!(planned.outline.contour().is_none(), "a fit is a standard rectangle");
+    assert_eq!(planned.nominal_size.length(), furnicraft_testkit::millimetres(200), "the narrowest width fits");
+    assert_eq!(planned.nominal_size.width(), furnicraft_testkit::millimetres(560), "and the whole depth");
+    harness.release_at(pointer, egui::PointerButton::Primary);
+    harness.settle();
 
     let document = harness.app.tabs.active();
-    let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
-    assert!(ghost.outline.contour().is_none(), "a fit is a standard rectangle");
-    assert_eq!(ghost.nominal_size.length(), furnicraft_testkit::millimetres(200), "the narrowest width fits");
-    assert_eq!(ghost.nominal_size.width(), furnicraft_testkit::millimetres(560), "and the whole depth");
     let created = document.editor.selected_node().expect("the new part is selected");
     let panel = document.session.project().panel(created).expect("the click created a panel");
     assert!(!panel.is_contour(), "the part is the standard panel the fit chose");
-    assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
-    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(panel.nominal_size(), planned.nominal_size, "and the ghost's size");
+    assert_eq!(panel.placement(), planned.placement, "and the ghost's placement");
     assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
     assert!(harness.revision() > before, "the click writes the document once");
 

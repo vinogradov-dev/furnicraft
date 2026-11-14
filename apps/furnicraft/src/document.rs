@@ -1101,8 +1101,7 @@ impl Document {
             .or_else(|| ui.input(|input| input.pointer.hover_pos()).filter(|pointer| on_field(*pointer)));
         let point = pointer.and_then(|pointer| {
             let ray = gizmo_math::ray_to(pointer, rect, self.scene.camera);
-            let (min, max) = fill_gizmo::envelope_box(self.session.project(), product)?;
-            fill_gizmo::envelope_entry(ray, min, max)
+            fill_gizmo::pointer_point(self.session.project(), product, ray)
         });
         let Some(point) = point.or_else(|| {
             // The field sits outside the envelope's silhouette now and then; the gesture keeps the

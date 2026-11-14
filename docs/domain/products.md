@@ -167,32 +167,43 @@ allowed; the lock is about adding work, not about owning the object.
 
 The maker's flow: open a product, choose “add a post” or “add a shelf”, point at the empty space.
 
-- The cursor ray meets the envelope's interior; the point defines the niche (§4).
+- The cursor ray enters the product's **own** envelope, in the product's frame, never the world box
+  around it; from a micrometre inside it the ray probes to the first surface, and the point rests a
+  micrometre in front of that face. A ray that meets only the far envelope keeps the entry point, so
+  pointing into an empty piece still measures the whole reserved space (0109). Pointing at a wall
+  measures the void in front of it, which is what the maker sees.
 - A **post** takes the niche's height and the depth the void leaves it; a **shelf** takes its width and
   depth. Which axis pair a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`,
   `None`). Each takes the cell's own cut at the board's thickness, so a post stands against a splayed
   wall with the depth the slab really has (0106).
-- The part has **two modes**, chosen from the tool's own method list and remembered by the workspace:
-  - **Largest fit** is the default: the part is the largest rectangle, with its sides on the panel's
-    own axes, that lies inside the cut section. It always fits, and it always keeps the standard
-    rectangle panel — resize, card and nominal fields included.
-  - **Whole shape** makes the part the section itself. Before the panel is chosen, the program asks
+- The part has **two builds**, chosen from the tool's own method list under a «Способ построения» /
+  “Build method” caption and remembered by the workspace. The cell keeps the post or shelf glyph while
+  a build is armed or pinned, so the list is a choice of build, not a choice of panel (0110):
+  - **Largest rectangle** is the default: the part is the largest rectangle, with its sides on the
+    panel's own axes, that lies inside the cut section. It always fits, and it always keeps the
+    standard rectangle panel — resize, card and nominal fields included.
+  - **Niche shape** makes the part the section itself. Before the panel is chosen, the program asks
     whether a standard rectangle draws exactly that shape: the plain rectangle, a rectangle with
     corner chamfers (asymmetric ones included) or one with corner radii. The candidates are
     generated and compared with the measured ring vertex by vertex within a micrometre, so a shape
     is never called standard on an approximation. Only a section no rectangle draws — the trapezoid
     of two angled posts, a cut that consumes a whole edge — becomes a contour panel, which trades
     `panel.resize` and the rectangle card for the exact shape (0042).
-  - **Whole shape meets a leaned wall flush.** A wall that is not plumb asks for an end face in its
+  - **Niche shape meets a leaned wall flush.** A wall that is not plumb asks for an end face in its
     own plane, which is the end bevel of a panel edge (0107). The part's outline is the section at
     the wide face — face `B` — and every outline edge whose wall leans gets that wall's own angle, so
     the far face is set back by exactly the amount the wall's inset across the thickness. A cell
     whose walls all lean the other way is filled from the other face: the board is turned half a
     turn about its own length axis, which is a placement and not a fourth stance (0105, 0108). A
     shape whose walls are all plumb asks for no bevel and keeps the standard panel above.
-- Two voids have no flat board: walls that lean against each other, and a wall nearer the board's
-  plane than a mitre (a ceiling that comes down at ten degrees). They are refused with a sentence
-  and “largest fit” remains the answer (0108).
+  - **A wall no end face can meet** — two walls leaning against each other, or a ceiling nearly level
+    with the board — makes the shape take the cut section over the whole thickness with no end
+    bevel. The part fits with a sliver at that wall instead of being refused (0109).
+- **A wall bounds the void where it stands.** A board that stops halfway, a top that covers only the
+  back of the frame or posts that end before the envelope's front are walls where they are; the
+  whole-face coverage test is gone, so an open front with a short top still offers a niche. A part can
+  therefore run past a board's own edge into open space; a surface standing *inside* the cell still
+  makes the void non-convex and is refused (0109).
 - A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
   is written until the click. A beveled part's ghost draws the far rim it really ends at, set back
   at the wall it meets.

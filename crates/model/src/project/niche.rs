@@ -46,9 +46,6 @@ const PLANE_PARALLEL: f64 = 1.0 - 1.0e-6;
 /// Cosine above which a plane's normal counts as level with an axis.
 const NORMAL_LEVEL: f64 = 1.0e-6;
 
-/// How far inside the free space a wall's coverage is tested, in millimetres.
-const COVER_INSET: f64 = 1.0e-3;
-
 /// Tolerance for comparing a cell corner with a plane, a face or a box, in millimetres.
 ///
 /// The probes report whole micrometres, so a corner where two walls meet can land a micrometre
@@ -388,8 +385,10 @@ impl Project {
     /// meets, probed again from the cell's own corners until a round adds no plane. A rectangular
     /// case answers [`NicheShape::Box`]; a case with splayed posts answers the trapezoid as
     /// [`NicheShape::Section`]; a leaned wall or ceiling answers [`NicheShape::Sloped`] with the cell
-    /// itself. A point outside every product is refused, and so is a void that is not one convex
-    /// cell (ADR 0099, ADR 0106).
+    /// itself. A point outside every product is refused, and so is a void that holds a surface the
+    /// cell did not cut against (ADR 0099, ADR 0106, ADR 0109). A wall bounds the void where its face
+    /// stands, not only when it covers a whole face of the envelope: an open front under a short top
+    /// still answers.
     pub fn niche(&self, point: DVec3) -> Result<Niche, NicheRefusal> {
         if !point.is_finite() {
             return Err(NicheRefusal::Outside);
@@ -420,9 +419,6 @@ impl Project {
                 let Some(cut) = cell.clipped(plane) else {
                     return Err(NicheRefusal::Unrepresentable);
                 };
-                if !self.covers_face(&cut, plane, placement, &surroundings) {
-                    return Err(NicheRefusal::Unrepresentable);
-                }
                 cell = cut;
                 added = true;
             }
@@ -462,46 +458,6 @@ impl Project {
                 local.is_finite() && cell.planes.iter().all(|plane| plane.distance_to(local) > COORDINATE_TOLERANCE)
             })
         })
-    }
-
-    /// Whether the wall that bounded the cell at `plane` still covers it.
-    ///
-    /// The face of the cell that lies on the plane is sampled at each of its corners — moved just
-    /// inside so a sample never sits on the edge of the board it tests — and at its middle. A board
-    /// that stops halfway leaves the plane empty above its end, which is what refuses it.
-    fn covers_face(&self, cell: &Cell, plane: NichePlane, placement: Placement, surroundings: &Surroundings) -> bool {
-        let on_face: Vec<DVec3> = cell
-            .corners
-            .iter()
-            .copied()
-            .filter(|corner| plane.distance_to(*corner).abs() <= COORDINATE_TOLERANCE)
-            .collect();
-        if on_face.len() < 3 {
-            return false;
-        }
-        let Some(middle) = midpoint(&on_face) else {
-            return false;
-        };
-        let mut samples: Vec<DVec3> = Vec::with_capacity(on_face.len().saturating_mul(2).saturating_add(1));
-        for corner in &on_face {
-            if let Some(direction) = (middle - *corner).try_normalize() {
-                samples.push(*corner + direction * COVER_INSET);
-            }
-        }
-        samples.push(middle);
-        samples.iter().all(|sample| self.covered(plane, *sample, placement, surroundings))
-    }
-
-    /// Whether a surface still stands on `plane` at the product-frame point `at`.
-    ///
-    /// A second surface on the same plane — the envelope a panel is flush with — keeps it a wall,
-    /// which is why the plane and not the surface is tested. The ray starts just inside the free
-    /// space and looks at the wall, because a ray that starts on a face and points into the solid
-    /// measures the far face, not the near one.
-    fn covered(&self, plane: NichePlane, at: DVec3, placement: Placement, surroundings: &Surroundings) -> bool {
-        let point = placement.transform_point(at + plane.normal * COVER_INSET);
-        let outward = -placement.transform_vector(plane.normal);
-        self.probe_within(point, outward, surroundings).is_some_and(|probe| probe.distance_mm <= COVER_INSET * 1.5)
     }
 
     /// The distance to the first furniture face along `direction`, against known surroundings.
@@ -792,19 +748,6 @@ fn centre(points: &[DVec2]) -> Option<DVec2> {
         return None;
     }
     let mut sum = DVec2::ZERO;
-    for point in points {
-        sum += *point;
-    }
-    let middle = sum / points.len() as f64;
-    middle.is_finite().then_some(middle)
-}
-
-/// The average of a set of points, or `None` when there are none or it is not finite.
-fn midpoint(points: &[DVec3]) -> Option<DVec3> {
-    if points.is_empty() {
-        return None;
-    }
-    let mut sum = DVec3::ZERO;
     for point in points {
         sum += *point;
     }
@@ -1200,16 +1143,43 @@ mod tests {
     }
 
     #[test]
-    fn a_wall_that_stops_halfway_is_refused() {
-        // A post that reaches only 300 mm up does not bound one face of a cell, so a point beside it
-        // has no niche the tool could cut a shelf to.
+    fn a_wall_that_stops_halfway_still_bounds_the_void_beside_it() {
+        // A post that reaches only 300 mm up still has an inner face, and the void beside it is one
+        // cell. Its plane bounds the footprint for the whole height, so a shelf at any height stops
+        // at the post instead of being refused (ADR 0109).
         let (mut project, piece) = empty_piece();
         let nominal = PanelNominalSize::new(millimetres(300), millimetres(560)).expect("a short post");
         let rotation = furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
         let placement = Placement::new(DVec3::new(318.0, 0.0, 0.0), rotation).expect("a place");
         project.add_panel(piece, "Stub", nominal, None, millimetres(18), placement).expect("add a stub");
-        let refusal = project.niche(DVec3::new(150.0, 280.0, 200.0)).expect_err("half a wall is not a wall");
-        assert_eq!(refusal, NicheRefusal::Unrepresentable);
+        let niche = project.niche(DVec3::new(150.0, 280.0, 200.0)).expect("the stub bounds the void");
+        assert_eq!(niche.shape, NicheShape::Box);
+        assert!((niche.local_max().x - 300.0).abs() < 1.0, "the post's inner face: {niche:?}");
+        assert!((niche.size.z - 720.0).abs() < 1.0, "the case is still 720 tall: {niche:?}");
+    }
+
+    #[test]
+    fn a_ceiling_that_covers_only_part_of_the_case_leaves_a_niche() {
+        // The open-front case: a top over the back two thirds and two walls that stop with it. The
+        // free space under the top is still one cell even though the top does not cover the whole
+        // envelope, which is what the coverage test used to refuse (ADR 0109).
+        let (mut project, piece) = empty_piece();
+        let top = PanelNominalSize::new(millimetres(600), millimetres(400)).expect("a short top");
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(0), millimetres(0), millimetres(702))
+            .expect("a top placement");
+        project.add_panel(piece, "Top", top, None, millimetres(18), placement).expect("add a top");
+        let wall = furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        for x in [18.0, 600.0] {
+            let nominal = PanelNominalSize::new(millimetres(720), millimetres(400)).expect("a short wall");
+            let placement = Placement::new(DVec3::new(x, 0.0, 0.0), wall).expect("a wall placement");
+            project.add_panel(piece, "Wall", nominal, None, millimetres(18), placement).expect("add a wall");
+        }
+        for y in [100.0, 300.0, 500.0] {
+            let niche = project.niche(DVec3::new(300.0, y, 300.0)).expect("a niche under the short top");
+            assert_eq!(niche.shape, NicheShape::Box);
+            assert!((niche.size.z - 702.0).abs() < 1.0, "the top still bounds the height: {niche:?}");
+        }
     }
 
     #[test]

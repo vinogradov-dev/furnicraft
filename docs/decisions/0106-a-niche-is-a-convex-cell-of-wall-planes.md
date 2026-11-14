@@ -1,6 +1,6 @@
 # 0106. A niche is a convex cell of wall planes
 
-- Status: Accepted; refines 0099 and 0103
+- Status: Accepted; refines 0099 and 0103; coverage clause superseded by 0109
 - Date: 2026-11-14
 
 ## Context

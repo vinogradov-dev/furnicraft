@@ -46,8 +46,8 @@ const WALL_TOLERANCE: f64 = 5.0e-3;
 ///
 /// A wall leaned past a mitre is nearer the board's own plane than to a side face, so the "end face"
 /// that would meet it is a taper across the large face — a variable-thickness board, which is not
-/// this feature — and the void it leaves across the slab is a wedge (N12). `Shape` refuses it and
-/// `Fit` stays the safe answer.
+/// this feature — and the void it leaves across the slab is a wedge (N12). `Shape` then takes the
+/// slab section with no end bevel; `Fit` answers the same cut (ADR 0109).
 const MAX_FILL_BEVEL: Degrees = Degrees::from_millidegrees(45_000);
 
 /// How a fill tool reads the section the walls leave.
@@ -114,8 +114,14 @@ pub enum FillRefusal {
     /// The void leaves no rectangle, or no ring, large enough to be a panel.
     TooSmall,
     /// The walls tilt against each other, so no one flat board meets them all.
+    ///
+    /// `Shape` falls back to the slab section without bevels, so [`Project::fill_plan`] does not
+    /// answer this today; the variant is the classifier's own refusal and stays for a caller that
+    /// asks a bevel question directly (ADR 0109).
     WallsDisagree,
     /// A wall lies so nearly level with the board that no end bevel can meet it.
+    ///
+    /// `Shape` falls back to the slab section, as above; the classifier's own refusal.
     Wedge,
 }
 
@@ -293,13 +299,25 @@ fn board(
                 niche.cut(stance.t, (value, value + gap), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
             (stance, footprint, Vec::new())
         }
-        FillMode::Shape => {
-            let stance = reference_face(niche, value, gap, stance)?;
-            let face = stance.face(value, gap);
-            let section = niche.cut(stance.t, (face, face), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
-            let angles = wall_bevels(niche, &section, face, &stance);
-            (stance, section, angles)
-        }
+        FillMode::Shape => match reference_face(niche, value, gap, stance) {
+            Ok(stance) => {
+                let face = stance.face(value, gap);
+                let section = niche.cut(stance.t, (face, face), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
+                let angles = wall_bevels(niche, &section, face, &stance);
+                (stance, section, angles)
+            }
+            // The wall planes here cannot all be met by one flat end face: two walls lean against
+            // each other, or a wall lies nearly level with the board. The shape is still useful and
+            // still fits if it takes the section the whole slab leaves — the same cut Fit reads —
+            // and no end bevel, so the maker gets the shape of the niche with a sliver at a wall
+            // instead of a refusal (ADR 0109).
+            Err(FillRefusal::WallsDisagree | FillRefusal::Wedge) => {
+                let section =
+                    niche.cut(stance.t, (value, value + gap), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
+                (stance, section, Vec::new())
+            }
+            Err(refusal) => return Err(refusal),
+        },
     };
     let (part, anchor) = part_of(&polygon, mode, &stance, &angles, thickness)?;
     // The panel's zero corner is the outline's own base corner, which the product frame answers from
@@ -1000,19 +1018,18 @@ mod tests {
     }
 
     #[test]
-    fn a_shelf_under_a_leaned_ceiling_is_a_wedge_in_the_shape_mode() {
+    fn a_shelf_under_a_leaned_ceiling_takes_the_slab_section_in_the_shape_mode() {
+        // The ceiling is nearly level with the board, so no end face can meet it; the board still
+        // fills the section the whole slab leaves, with no bevel, in both modes (ADR 0109).
         let (mut project, product) = empty_product(600, 560, 720);
         leaned_ceiling(&mut project, product);
         let thickness = millimetres(18);
-        assert_eq!(
-            plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness),
-            Err(FillRefusal::Wedge),
-            "a ceiling nearly parallel to the board needs a taper, not an end face"
-        );
-        assert!(
-            plan(&project, product, Fill::WidthAndDepth, FillMode::Fit, thickness).is_ok(),
-            "the largest fit stays the safe answer"
-        );
+        let shaped = plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness)
+            .expect("the shape falls back to the slab section");
+        assert!(shaped.bevels.is_empty(), "a level wall asks for no end face: {:?}", shaped.bevels);
+        assert_eq!(shaped.corners, shaped.far_corners, "the far face is the base rim lifted");
+        let fitted = plan(&project, product, Fill::WidthAndDepth, FillMode::Fit, thickness).expect("a fit plan");
+        assert_eq!(shaped.nominal_size, fitted.nominal_size, "the slab section is the fit's rectangle here");
     }
 
     #[test]

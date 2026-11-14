@@ -21,6 +21,12 @@
 //!
 //! The ghost is shell paint, not the session preview overlay: an overlay entry is keyed by the id of
 //! a node the document holds (ADR 0093), and a part that does not exist yet has none.
+//!
+//! The point the niche is measured from is the one the maker points at: the ray through the pointer
+//! enters the product's own envelope, which is a turned box and never its world bounds, and the
+//! first surface it meets after that gives the face the niche belongs to (ADR 0109). A pointer that
+//! hits the back wall measures the void in front of it; one that hits nothing inside measures the
+//! whole product.
 
 use eframe::egui::{self, FontId, Pos2, Rect, Stroke, Ui};
 use furnicraft_geom::DVec3;
@@ -348,36 +354,65 @@ fn label(ui: &Ui, painter: &egui::Painter, position: Pos2, text: &str) {
     painter.galley(rect.center() - galley.size() * 0.5, galley, theme::text(ui));
 }
 
-/// The world box of a product's authored envelope, or `None` when it has no envelope.
-pub(crate) fn envelope_box(project: &Project, product: Id) -> Option<(DVec3, DVec3)> {
+/// How far inside the product the measured point is moved, in millimetres.
+///
+/// The envelope is a boundary, and a probe that starts exactly on it sees a zero-length face; one
+/// micrometre of the document's own resolution puts the point in the free space without moving the
+/// measurement a maker could see.
+const ENTRY_INSET_MM: f64 = 1.0e-3;
+
+/// How far off a surface the measured point rests, in millimetres.
+///
+/// A face is the wall of the void, so the point sits a micrometre on the free side of it. The same
+/// resolution keeps a probe from starting on the face it just measured (ADR 0109).
+const FACE_INSET_MM: f64 = 1.0e-3;
+
+/// The point in the open product the pointer points at, in world millimetres.
+///
+/// The ray enters the product's authored envelope — taken in the product's own frame, because a
+/// turned piece is not its world bounds — and then meets the first surface inside it. That face is
+/// what the maker sees under the cursor, so the void is measured a micrometre in front of it; a ray
+/// that meets nothing but the envelope answers the entry point, which is the whole reserved space.
+/// A pointer outside the product answers `None`.
+pub(crate) fn pointer_point(project: &Project, product: Id, ray: Ray) -> Option<DVec3> {
     let envelope = project.container(product)?.envelope()?;
     let size =
         DVec3::new(envelope.x().millimetres_f64(), envelope.y().millimetres_f64(), envelope.z().millimetres_f64());
-    let world = project.world_placement(product)?;
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for x in [0.0, size.x] {
-        for y in [0.0, size.y] {
-            for z in [0.0, size.z] {
-                let corner = world.transform_point(DVec3::new(x, y, z));
-                if !corner.is_finite() {
-                    return None;
-                }
-                min = min.min(corner);
-                max = max.max(corner);
-            }
-        }
+    if !size.is_finite() || size.min_element() <= 0.0 {
+        return None;
     }
-    Some((min, max))
+    let placement = project.world_placement(product)?;
+    let inverse = placement.inverse().ok()?;
+    let origin = inverse.transform_point(ray.origin());
+    let direction = inverse.transform_vector(ray.direction());
+    let entry = box_entry(origin, direction, DVec3::ZERO, size)?;
+    let local_entry = if entry <= 0.0 { origin } else { origin + direction * entry };
+    let world_entry = placement.transform_point(local_entry);
+    if !world_entry.is_finite() {
+        return None;
+    }
+    let Some(step) = ray.direction().try_normalize() else {
+        return Some(world_entry);
+    };
+    let inside = world_entry + step * ENTRY_INSET_MM;
+    let Some(probe) = project.probe(inside, ray.direction()) else {
+        return Some(inside);
+    };
+    // The envelope's own far face means the ray crossed the whole void: the entry point is the
+    // measurement. Anything else is a surface the maker is looking at, and the free space is on
+    // the side the ray came from.
+    if probe.hit.kind == furnicraft_model::SurfaceKind::Envelope || probe.distance_mm <= ENTRY_INSET_MM {
+        return Some(inside);
+    }
+    let point = probe.face.point + probe.face.normal * FACE_INSET_MM;
+    point.is_finite().then_some(point)
 }
 
-/// The point where a ray enters a world box, or the ray's origin when it starts inside.
+/// The distance at which a ray enters a box, or the origin's own distance when it starts inside.
 ///
 /// This is the cursor's resting place in the void: the face of the reserved space the maker is
 /// pointing at. A ray that misses the box answers `None`.
-pub(crate) fn envelope_entry(ray: Ray, min: DVec3, max: DVec3) -> Option<DVec3> {
-    let origin = ray.origin();
-    let direction = ray.direction();
+fn box_entry(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
     if !origin.is_finite() || !direction.is_finite() {
         return None;
     }
@@ -401,11 +436,7 @@ pub(crate) fn envelope_entry(ray: Ray, min: DVec3, max: DVec3) -> Option<DVec3> 
     if exit < enter || exit < 0.0 {
         return None;
     }
-    if enter <= 0.0 {
-        return Some(origin);
-    }
-    let point = origin + direction * enter;
-    point.is_finite().then_some(point)
+    Some(enter.max(0.0))
 }
 
 #[cfg(test)]
@@ -683,14 +714,50 @@ mod tests {
 
     #[test]
     fn the_cursor_enters_the_envelope_at_its_near_face() {
+        let (project, product) = piece();
         let ray = Ray::new(DVec3::new(300.0, -1000.0, 300.0), DVec3::Y).expect("a ray");
-        let (min, max) = (DVec3::ZERO, DVec3::new(600.0, 560.0, 720.0));
-        let entry = envelope_entry(ray, min, max).expect("the ray enters the box");
-        assert!((entry - DVec3::new(300.0, 0.0, 300.0)).length() < 1e-9, "was {entry:?}");
+        let point = pointer_point(&project, product, ray).expect("the ray enters the piece");
+        assert!((point.x - 300.0).abs() < 1e-9 && (point.z - 300.0).abs() < 1e-9, "was {point:?}");
+        assert!((0.0..0.01).contains(&point.y), "a micrometre inside the near face: {point:?}");
         let inside = Ray::new(DVec3::new(300.0, 280.0, 300.0), DVec3::Y).expect("a ray");
-        assert_eq!(envelope_entry(inside, min, max), Some(inside.origin()), "a camera inside starts where it is");
+        let point = pointer_point(&project, product, inside).expect("a camera inside starts where it is");
+        assert!((point.y - 280.0).abs() < 0.01, "was {point:?}");
         let missing = Ray::new(DVec3::new(-50.0, -1000.0, 300.0), -DVec3::Y).expect("a ray");
-        assert_eq!(envelope_entry(missing, min, max), None);
+        assert_eq!(pointer_point(&project, product, missing), None);
+    }
+
+    #[test]
+    fn the_pointer_measures_from_the_face_it_points_at() {
+        let (mut project, product) = piece();
+        // The back wall's inner face is at y = 542; the ray crosses the open front and stops there.
+        leaned_wall(&mut project, product, 542.0, 0.0);
+        let ray = Ray::new(DVec3::new(300.0, -1000.0, 300.0), DVec3::Y).expect("a ray");
+        let point = pointer_point(&project, product, ray).expect("the face is in the piece");
+        assert!((point.y - 541.999).abs() < 0.01, "the point rests in front of the wall: {point:?}");
+        let ghost = plan(&project, product, point, Fill::WidthAndDepth, millimetres(18)).expect("a shelf");
+        assert!(ghost.nominal_size.length().millimetres_f64() <= 600.0);
+        assert!(ghost.niche.local_max().y <= 542.0, "the niche ends at the wall: {:?}", ghost.niche);
+    }
+
+    #[test]
+    fn a_turned_product_is_entered_through_its_own_box() {
+        let (mut project, product) = piece();
+        let turn = Placement::IDENTITY
+            .with_rotation_euler(furnicraft_model::EulerAngles {
+                z: furnicraft_units::Degrees::from_millidegrees(90_000),
+                ..furnicraft_model::EulerAngles::default()
+            })
+            .expect("a turn");
+        project.set_node_placement(product, turn).expect("turn the piece");
+        let world = |x: f64, y: f64, z: f64| turn.transform_point(DVec3::new(x, y, z));
+        // The piece now spans x in [-560, 0] and y in [0, 600], so a ray at x = -500 points into it.
+        let ray = Ray::new(world(300.0, -500.0, 300.0), turn.transform_vector(DVec3::Y)).expect("a ray");
+        let point = pointer_point(&project, product, ray).expect("the turned piece is entered");
+        let local = turn.inverse().expect("an inverse").transform_point(point);
+        assert!((0.0..0.01).contains(&local.y), "a micrometre inside the piece's own face: {local:?}");
+        // A ray aimed at the world bounds but outside the turned box has no point at all.
+        let outside = Ray::new(DVec3::new(10.0, -1000.0, 300.0), DVec3::Y).expect("a ray");
+        assert_eq!(pointer_point(&project, product, outside), None);
     }
 
     #[test]
@@ -801,21 +868,5 @@ mod tests {
         }
         output.drop_without_applying_deltas();
         (drawn, lines)
-    }
-
-    #[test]
-    fn a_turned_product_still_has_a_world_envelope_box() {
-        let (mut project, product) = piece();
-        let turn = Placement::IDENTITY
-            .with_rotation_euler(furnicraft_model::EulerAngles {
-                z: furnicraft_units::Degrees::from_millidegrees(90_000),
-                ..furnicraft_model::EulerAngles::default()
-            })
-            .expect("a turn");
-        project.set_node_placement(product, turn).expect("turn the piece");
-        let (min, max) = envelope_box(&project, product).expect("a box");
-        assert!((min.x + 560.0).abs() < 1e-9, "was {min:?}");
-        assert!((max.x).abs() < 1e-9, "was {max:?}");
-        assert!((max.y - 600.0).abs() < 1e-9, "was {max:?}");
     }
 }
