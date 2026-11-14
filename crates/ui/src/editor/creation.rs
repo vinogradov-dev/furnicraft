@@ -23,8 +23,8 @@ use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ClassCode, Envelope, Id, LightKind, MaterialId, PanelNominalSize, PanelOutline, Placement,
-    Primitive, Project,
+    CameraProjection, ClassCode, EdgeBevel, Envelope, Id, LightKind, MaterialId, PanelNominalSize, PanelOutline,
+    Placement, Primitive, Project,
 };
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
@@ -116,7 +116,16 @@ impl Editor {
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
     pub(super) fn create_panel(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
         let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
-        self.create_panel_sized(session, parent, "Panel".to_owned(), nominal_size, None, Placement::IDENTITY, None)
+        self.create_panel_sized(
+            session,
+            parent,
+            "Panel".to_owned(),
+            nominal_size,
+            None,
+            Vec::new(),
+            Placement::IDENTITY,
+            None,
+        )
     }
 
     /// Dispatches `panel.create` for a part of exactly this size, placement and class.
@@ -129,7 +138,8 @@ impl Editor {
     /// The outline is what the part is born with: a ring makes it a contour panel (ADR 0042), a
     /// rectangle may carry the corner cuts the fill tool classified, and `None` keeps the plain
     /// rectangle. A shelf in a splayed niche takes the trapezoid it was measured against that way
-    /// (ADR 0099), in the same one command and one undo entry as the click itself.
+    /// (ADR 0099). The bevels travel in the same command as the outline, so a board cut to meet a
+    /// leaned wall is one part and one undo entry too (ADR 0107, ADR 0108).
     #[allow(clippy::too_many_arguments)]
     pub fn create_panel_sized(
         &mut self,
@@ -138,11 +148,12 @@ impl Editor {
         name: String,
         nominal_size: PanelNominalSize,
         outline: Option<PanelOutline>,
+        bevels: Vec<EdgeBevel>,
         placement: Placement,
         class: Option<ClassCode>,
     ) -> Result<(), String> {
         let material = Self::panel_material(session)?;
-        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class, outline })?;
+        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class, outline, bevels })?;
         let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
         Ok(())

@@ -612,8 +612,10 @@ impl Project {
     /// A stored ring is rebased exactly as [`Project::add_panel_contour`] does it, so the panel's
     /// zero corner stays the ring's base corner. A rectangle outline keeps its nominal size and may
     /// carry corner treatments; the generator that will draw it runs here, so a cut that consumes a
-    /// whole edge is refused before the panel enters the tree rather than on the first frame. One
-    /// call is one revision, which is what makes a fill click one undo entry.
+    /// whole edge is refused before the panel enters the tree rather than on the first frame. The
+    /// end bevels a shaped fill measured travel in the same call, so the part is born finished and
+    /// one click stays one revision and one undo entry (ADR 0107, ADR 0108). One call is one
+    /// revision, which is what makes a fill click one undo entry.
     #[allow(clippy::too_many_arguments)]
     pub fn add_panel_with_outline(
         &mut self,
@@ -621,13 +623,22 @@ impl Project {
         name: impl Into<String>,
         nominal_size: PanelNominalSize,
         outline: PanelOutline,
+        bevels: &[EdgeBevel],
         material: Option<MaterialId>,
         last_known_thickness: Length,
         placement: Placement,
     ) -> Result<Id, ProjectError> {
         let outline = match outline {
             PanelOutline::Contour { contour } => {
-                return self.add_panel_contour(parent, name, &contour, material, last_known_thickness, placement);
+                return self.add_panel_contour_with_bevels(
+                    parent,
+                    name,
+                    &contour,
+                    bevels,
+                    material,
+                    last_known_thickness,
+                    placement,
+                );
             }
             outline => outline,
         };
@@ -639,6 +650,14 @@ impl Project {
         let mut panel = Panel::new(id, name, nominal_size, material, last_known_thickness, placement)?;
         panel.set_outline(outline);
         panel.nominal_contour()?;
+        panel.set_bevels(bevels.to_vec());
+        panel.validate_bevels()?;
+        if !bevels.is_empty() {
+            let geometry = panel.geometry_with_fallbacks()?;
+            if panel.bevel_violation(panel.nominal_size(), &geometry)?.is_some() {
+                return Err(ProjectError::BevelRemovesBody { panel: id });
+            }
+        }
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };
@@ -664,6 +683,24 @@ impl Project {
         last_known_thickness: Length,
         placement: Placement,
     ) -> Result<Id, ProjectError> {
+        self.add_panel_contour_with_bevels(parent, name, contour, &[], material, last_known_thickness, placement)
+    }
+
+    /// Adds a contour panel with the end bevels a shaped fill measured, in one revision.
+    ///
+    /// The bevels name ring segments of the contour it is born with, so the record and the outline
+    /// cannot disagree: both are validated against the candidate panel before it enters the tree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_panel_contour_with_bevels(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        contour: &Contour,
+        bevels: &[EdgeBevel],
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
         if !self.is_container(parent) {
             return Err(ProjectError::ContainerNotFound { id: parent });
         }
@@ -671,7 +708,16 @@ impl Project {
         let id = self.allocate_id()?;
         let rebased = rebase_origin_at(contour.clone(), placement, FrameAnchor::BASE_CORNER)
             .map_err(|_| ProjectError::CreationFrame { id })?;
-        let panel = Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
+        let mut panel =
+            Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
+        panel.set_bevels(bevels.to_vec());
+        panel.validate_bevels()?;
+        if !bevels.is_empty() {
+            let geometry = panel.geometry_with_fallbacks()?;
+            if panel.bevel_violation(panel.nominal_size(), &geometry)?.is_some() {
+                return Err(ProjectError::BevelRemovesBody { panel: id });
+            }
+        }
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };

@@ -183,12 +183,24 @@ The maker's flow: open a product, choose “add a post” or “add a shelf”, 
     is never called standard on an approximation. Only a section no rectangle draws — the trapezoid
     of two angled posts, a cut that consumes a whole edge — becomes a contour panel, which trades
     `panel.resize` and the rectangle card for the exact shape (0042).
+  - **Whole shape meets a leaned wall flush.** A wall that is not plumb asks for an end face in its
+    own plane, which is the end bevel of a panel edge (0107). The part's outline is the section at
+    the wide face — face `B` — and every outline edge whose wall leans gets that wall's own angle, so
+    the far face is set back by exactly the amount the wall's inset across the thickness. A cell
+    whose walls all lean the other way is filled from the other face: the board is turned half a
+    turn about its own length axis, which is a placement and not a fourth stance (0105, 0108). A
+    shape whose walls are all plumb asks for no bevel and keeps the standard panel above.
+- Two voids have no flat board: walls that lean against each other, and a wall nearer the board's
+  plane than a mitre (a ceiling that comes down at ten degrees). They are refused with a sentence
+  and “largest fit” remains the answer (0108).
 - A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
-  is written until the click.
+  is written until the click. A beveled part's ghost draws the far rim it really ends at, set back
+  at the wall it meets.
 - The offset step is **1 mm**; there are no fractional sizes.
-- A click creates the part with exactly the ghost's size, outline and mode, through one command and
-  one undo entry: the outline — a rectangle with its corner cuts, or the ring — travels in the same
-  `panel.create`, so a shaped part is never a create followed by a second edit.
+- A click creates the part with exactly the ghost's size, outline, bevels and mode, through one
+  command and one undo entry: the outline — a rectangle with its corner cuts, or the ring — and the
+  end bevels travel in the same `panel.create`, so a shaped part is never a create followed by a
+  second edit.
 - The two fills handle a product in any orientation, because the cell is measured in the product's own
   frame; a curved boundary is measured by the box around its body, so the part fits with a gap. A
   drawer, a back panel and a facade need their own fill rules.

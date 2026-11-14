@@ -81,6 +81,10 @@ from where the board stands in its product rather than stored.
   wall need no offset. A tool that stands a part therefore has to know the stance's extrusion
   direction instead of assuming its node is the low corner of the board — which is exactly the
   assumption that made the old post hang from the ceiling.
+- A fill may turn a board half a turn about its own length axis, and that is still the same stance:
+  the turn keeps the length axis and the numbering and swaps the two large faces, which is all the
+  shaped fill needs when a wall makes face `A` the wide one. It is a placement, recorded nowhere
+  (ADR 0108).
 - Both hands of a post are the same board, and one of them has its finished face on `A` and the other
   on `B`: the right post (smaller `x`) is `A` outward, the left post is `B` outward. A parts list, a
   drawing or a CAM program that says "finish `A`" must therefore name the hand, and can derive it

@@ -1993,6 +1993,7 @@ fn a_fill_creates_a_classed_panel_of_exactly_the_ghost_size() {
             "Shelf".to_owned(),
             size,
             None,
+            Vec::new(),
             placement,
             Some(ClassCode::HORIZONTAL_PANEL),
         )

@@ -64,6 +64,14 @@ pub struct PanelCreate {
     /// so a click is never a create followed by a corner-feature change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<PanelOutline>,
+    /// The end bevels the shaped fill measured, one per outline edge (ADR 0107).
+    ///
+    /// They travel with the same command as the outline, so a board that meets a leaned wall flush
+    /// is one create and one undo entry rather than a create followed by a bevel per edge. Each
+    /// record names a rectangle edge or a ring segment of the outline above; the model validates
+    /// both against the candidate panel before it enters the tree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bevels: Vec<EdgeBevel>,
 }
 
 impl PanelCreate {
@@ -446,10 +454,11 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
                     message: "the outline and the nominal size do not describe the same panel".to_owned(),
                 });
             }
-            project.add_panel_contour(
+            project.add_panel_contour_with_bevels(
                 params.parent,
                 params.name,
                 &anchored,
+                &params.bevels,
                 Some(params.material),
                 thickness,
                 params.placement,
@@ -460,18 +469,36 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
             params.name,
             params.nominal_size,
             outline.clone(),
+            &params.bevels,
             Some(params.material),
             thickness,
             params.placement,
         )?,
-        None => project.add_panel(
-            params.parent,
-            params.name,
-            params.nominal_size,
-            Some(params.material),
-            thickness,
-            params.placement,
-        )?,
+        None => {
+            if params.bevels.is_empty() {
+                project.add_panel(
+                    params.parent,
+                    params.name,
+                    params.nominal_size,
+                    Some(params.material),
+                    thickness,
+                    params.placement,
+                )?
+            } else {
+                // A bevel list with no outline still names rectangle edges, so the plain rectangle is
+                // created through the same path rather than dropping the records.
+                project.add_panel_with_outline(
+                    params.parent,
+                    params.name,
+                    params.nominal_size,
+                    PanelOutline::default(),
+                    &params.bevels,
+                    Some(params.material),
+                    thickness,
+                    params.placement,
+                )?
+            }
+        }
     };
     if let Some(class) = params.class {
         project.set_property(id, SYSTEM_CLASS, PropertyValue::class(class))?;

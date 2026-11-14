@@ -113,6 +113,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0105](0105-a-panel-stance-is-the-flat-frame-turned.md) | A panel stance is the flat frame turned, never mirrored | Accepted |
 | [0106](0106-a-niche-is-a-convex-cell-of-wall-planes.md) | A niche is a convex cell of wall planes | Accepted; refines 0099 and 0103 |
 | [0107](0107-an-end-bevel-is-an-angle-about-its-edge.md) | An end bevel is an angle about its outline edge | Accepted |
+| [0108](0108-a-shaped-fill-bevels-its-ends-onto-the-walls.md) | A shaped fill bevels its ends onto the walls, and turns the board when it must | Accepted; refines 0105 and 0107 |
 
 ## Format
 

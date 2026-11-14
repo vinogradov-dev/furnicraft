@@ -24,7 +24,9 @@
 
 use eframe::egui::{self, FontId, Pos2, Rect, Stroke, Ui};
 use furnicraft_geom::DVec3;
-use furnicraft_model::{Fill, FillMode, FillRefusal, Id, Niche, PanelNominalSize, PanelOutline, Placement, Project};
+use furnicraft_model::{
+    EdgeBevel, Fill, FillMode, FillRefusal, Id, Niche, PanelNominalSize, PanelOutline, Placement, Project,
+};
 use furnicraft_scene::{Camera, Ray};
 use furnicraft_ui::theme;
 use furnicraft_units::Length;
@@ -58,9 +60,11 @@ pub(crate) struct FillGhost {
     pub(crate) free_low: f64,
     /// The larger end of the panel along the free axis, in the parent frame and millimetres.
     pub(crate) free_high: f64,
+    /// The end bevels the shaped fill measured, one per beveled outline edge.
+    pub(crate) bevels: Vec<EdgeBevel>,
     /// The outline's corners on the panel's base face, in world millimetres.
     world: Vec<DVec3>,
-    /// The same corners on the panel's far face.
+    /// The far face's corners: the base rim with every beveled edge set back, in the world.
     top: Vec<DVec3>,
     /// The midpoints of the two faces the distance fields measure, low end first.
     faces: [Option<DVec3>; 2],
@@ -278,10 +282,14 @@ pub(crate) fn plan_at(
     if world.len() < 3 || !gap.is_finite() || gap <= 0.0 {
         return Err("The outline of the void is not a ring.".to_owned());
     }
-    // The far face is the base face moved by the material thickness along the panel's own Z axis: a
-    // shelf's thickness is vertical, a post's runs across the void.
-    let lift = world_placement.transform_vector(DVec3::Z) * gap;
-    let top = world.iter().map(|corner| *corner + lift).collect::<Vec<_>>();
+    // The far face is one material thickness along the panel's own Z axis: a shelf's thickness is
+    // vertical, a post's runs across the void. Its corners are the plan's far ring, not the base rim
+    // lifted, because a beveled edge sets the far face back into the wall's plane (ADR 0108).
+    let top = plan
+        .far_corners
+        .iter()
+        .map(|corner| world_placement.transform_point(DVec3::new(corner.x, corner.y, gap)))
+        .collect::<Vec<_>>();
     if world.iter().chain(top.iter()).any(|corner| !corner.is_finite()) {
         return Err("The part cannot be placed in the open product.".to_owned());
     }
@@ -301,6 +309,7 @@ pub(crate) fn plan_at(
         nominal_size: plan.nominal_size,
         placement: plan.placement,
         niche: plan.niche,
+        bevels: plan.bevels,
         size_mm,
         free_low: plan.free_low,
         free_high: plan.free_high,
@@ -322,6 +331,12 @@ fn refusal_sentence(refusal: FillRefusal) -> String {
         FillRefusal::NoFrame => "The open product has no frame.".to_owned(),
         FillRefusal::TooThin => "The void is thinner than the material.".to_owned(),
         FillRefusal::TooSmall => "The void is too small for a panel.".to_owned(),
+        FillRefusal::WallsDisagree => {
+            "The walls here lean against each other, so no flat board meets them all; use the largest fit.".to_owned()
+        }
+        FillRefusal::Wedge => {
+            "The void narrows across the board's thickness, where no end bevel helps; use the largest fit.".to_owned()
+        }
     }
 }
 
@@ -445,6 +460,16 @@ mod tests {
         let placement = Placement::new(DVec3::new(0.0, 0.0, 699.5), rotation).expect("a placement");
         let nominal = PanelNominalSize::new(millimetres(600), millimetres(620)).expect("a ceiling size");
         project.add_panel(product, "Ceiling", nominal, None, millimetres(18), placement).expect("add a ceiling");
+    }
+
+    /// A board standing as the case's back wall, its inner face through `y = through` at `z = 0`
+    /// and leaned by `degrees` about `+X`: a positive lean brings the face forward with height.
+    fn leaned_wall(project: &mut Project, product: Id, through: f64, degrees: f64) {
+        let wall = DQuat::from_rotation_z(-FRAC_PI_2) * DQuat::from_rotation_y(-FRAC_PI_2);
+        let rotation = DQuat::from_rotation_x(degrees.to_radians()) * wall;
+        let placement = Placement::new(DVec3::new(0.0, through, 0.0), rotation).expect("a wall placement");
+        let nominal = PanelNominalSize::new(millimetres(1600), millimetres(600)).expect("a wall size");
+        project.add_panel(product, "Wall", nominal, None, millimetres(18), placement).expect("add a wall");
     }
 
     fn shelf_slot(project: &mut Project, product: Id, at: (i64, i64, i64)) {
@@ -686,6 +711,40 @@ mod tests {
             assert!(drawn.0.iter().any(|text| text == size), "the {size} mm callout is missing: {:?}", drawn.0);
         }
         assert!(drawn.1 >= 12, "the ghost draws a box's twelve edges, got {}", drawn.1);
+    }
+
+    #[test]
+    fn a_beveled_ghost_sets_its_far_rim_back_into_the_wall() {
+        let (mut project, product) = piece();
+        leaned_wall(&mut project, product, 560.0, 10.0);
+        let mut gizmo = FillGizmo::default();
+        assert!(gizmo.hover(
+            &project,
+            product,
+            DVec3::new(300.0, 280.0, 360.0),
+            Fill::WidthAndDepth,
+            FillMode::Shape,
+            millimetres(18),
+            None
+        ));
+        let ghost = gizmo.ghost().expect("the leaned void takes a ghost");
+        assert_eq!(ghost.bevels.len(), 1, "the wall's bevel travels with the ghost: {:?}", ghost.bevels);
+        assert!(fits(ghost), "the beveled ghost stays inside the void");
+        // The far rim is the base rim with the beveled edge set back, not the base rim lifted.
+        let lift = DVec3::new(0.0, 0.0, 18.0);
+        assert!(
+            ghost.top.iter().zip(&ghost.world).any(|(top, base)| (*top - (*base + lift)).length() > 1.0),
+            "the far rim is set back at the wall: {:?}",
+            ghost.top
+        );
+        let back = ghost.world.iter().map(|corner| corner.y).fold(f64::NEG_INFINITY, f64::max);
+        let far_back = ghost.top.iter().map(|corner| corner.y).fold(f64::NEG_INFINITY, f64::max);
+        let setback = 18.0 * 10.0_f64.to_radians().tan();
+        assert!(
+            (back - far_back - setback).abs() <= 1.0e-3,
+            "the far back edge is one setback forward of the base edge: {} vs {setback}",
+            back - far_back
+        );
     }
 
     #[test]

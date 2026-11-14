@@ -1311,6 +1311,7 @@ impl Document {
             name,
             ghost.nominal_size,
             Some(ghost.outline.clone()),
+            ghost.bevels.clone(),
             ghost.placement,
             Some(arm.class),
         )

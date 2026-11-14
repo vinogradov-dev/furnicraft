@@ -658,7 +658,16 @@ fn splayed_shelf_harness(name: &str) -> (Harness, furnicraft_model::Id, egui::Po
         .expect("a post size");
         document
             .editor
-            .create_panel_sized(&mut document.session, product, "Post".to_owned(), nominal, None, placement, None)
+            .create_panel_sized(
+                &mut document.session,
+                product,
+                "Post".to_owned(),
+                nominal,
+                None,
+                Vec::new(),
+                placement,
+                None,
+            )
             .expect("add a post");
     }
     let project = document.session.project();
@@ -673,6 +682,88 @@ fn splayed_shelf_harness(name: &str) -> (Harness, furnicraft_model::Id, egui::Po
     let pointer = gizmo_math::screen_point(document.camera(), rect, centre).expect("the frame is on screen");
     assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
     (harness, product, pointer)
+}
+
+/// A harness whose open product holds a back wall leaned 10 degrees, plus the pointer in the void
+/// and the product's id.
+///
+/// The wall's inner face passes through `y = 560` at the floor and comes forward as it rises, so a
+/// shelf cut to the wide face meets it with a bevel rather than a square end (N12).
+fn leaned_shelf_harness(name: &str) -> (Harness, furnicraft_model::Id, egui::Pos2) {
+    let mut harness = Harness::with_session(name, crate::scene_build::empty_session().expect("empty"));
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    let document = harness.app.tabs.active_mut();
+    let product = document.session.active_product().expect("the card opens the frame");
+    let wall = furnicraft_geom::DQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2)
+        * furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+    let rotation = furnicraft_geom::DQuat::from_rotation_x(10.0_f64.to_radians()) * wall;
+    let placement =
+        furnicraft_model::Placement::new(furnicraft_geom::DVec3::new(0.0, 560.0, 0.0), rotation).expect("a placement");
+    let nominal = furnicraft_model::PanelNominalSize::new(
+        furnicraft_testkit::millimetres(1600),
+        furnicraft_testkit::millimetres(600),
+    )
+    .expect("a wall size");
+    document
+        .editor
+        .create_panel_sized(
+            &mut document.session,
+            product,
+            "Wall".to_owned(),
+            nominal,
+            None,
+            Vec::new(),
+            placement,
+            None,
+        )
+        .expect("add the leaned wall");
+    let project = document.session.project();
+    let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+    let size = furnicraft_geom::DVec3::new(
+        envelope.x().millimetres_f64(),
+        envelope.y().millimetres_f64(),
+        envelope.z().millimetres_f64(),
+    );
+    // A point inside the void: the wall's face is at 560 - z tan 10, so 300 mm back is free.
+    let inside = furnicraft_geom::DVec3::new(size.x * 0.5, size.y * 0.5, size.z * 0.5);
+    let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+    let pointer = gizmo_math::screen_point(document.camera(), rect, inside).expect("the frame is on screen");
+    assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+    (harness, product, pointer)
+}
+
+#[test]
+fn a_beveled_fill_is_one_click_and_one_undo() {
+    // The wall leans, so the shaped shelf meets it with an end bevel. The bevels travel in the same
+    // `panel.create` as the outline, so the click is one part and one undo entry, not a create
+    // followed by one edit per edge (ADR 0107, ADR 0108).
+    let (mut harness, product, pointer) = leaned_shelf_harness("frame-fill-beveled");
+    let document = harness.app.tabs.active_mut();
+    document
+        .editor
+        .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Shape, Lang::En)
+        .expect("the shelf fill arms inside the open frame");
+    let before = harness.revision();
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let document = harness.app.tabs.active();
+    let ghost = document.fill_gizmo.ghost().cloned().expect("the leaned void took a ghost");
+    assert_eq!(ghost.bevels.len(), 1, "the wall asks for one bevel: {:?}", ghost.bevels);
+    let created = document.editor.selected_node().expect("the new part is selected");
+    let panel = document.session.project().panel(created).expect("the click created a panel");
+    assert!(panel.is_contour(), "a beveled part is a contour panel");
+    assert_eq!(panel.bevels(), ghost.bevels.as_slice(), "the stored bevels are the ghost's");
+    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+    assert!(harness.revision() > before, "the click writes the document once");
+
+    let document = harness.app.tabs.active_mut();
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the beveled part");
 }
 
 #[test]

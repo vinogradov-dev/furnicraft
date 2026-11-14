@@ -392,6 +392,7 @@ mod tests {
             placement: Placement::IDENTITY,
             class: None,
             outline: None,
+            bevels: Vec::new(),
         }
     }
 
@@ -591,6 +592,7 @@ mod tests {
                 .expect("a placement"),
             class: Some(fill),
             outline: Some(PanelOutline::Contour { contour: ring.clone() }),
+            bevels: Vec::new(),
         };
         let params = json_params(&request);
         let before = session.project().revision();
@@ -606,6 +608,55 @@ mod tests {
         );
         assert_eq!(panel.outline_contour().map(|stored| stored.bounds_micrometres()), Some(ring.bounds_micrometres()));
         assert_eq!(session.project().class(id), Some(fill), "the tool's class travels with the same command");
+        assert!(session.project().revision() > before);
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole part back");
+    }
+
+    #[test]
+    fn a_beveled_panel_is_born_with_its_bevels_in_one_undo_step() {
+        // A shaped fill that meets a leaned wall hands its bevel list to the same `panel.create`, so
+        // the part is one create and one undo entry rather than a create plus one edit per edge
+        // (ADR 0107, ADR 0108).
+        use furnicraft_model::{ContourSegmentId, EdgeBevel, EdgeRef};
+        use furnicraft_units::Degrees;
+
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let mm = |value: i64| Length::from_millimetres(value).expect("millimetres");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [mm(400), Length::ZERO],
+            [mm(400), mm(560)],
+            [Length::ZERO, mm(560)],
+        ])
+        .expect("a rectangle ring");
+        let bevel = EdgeBevel::new(
+            EdgeRef::Ring { segment: ContourSegmentId::new(1).expect("an id") },
+            Degrees::from_millidegrees(10_000),
+        )
+        .expect("a bevel");
+        let request = PanelCreate {
+            parent: product,
+            name: "Shelf".to_owned(),
+            nominal_size: PanelNominalSize::new(mm(400), mm(560)).expect("a size"),
+            material: sample_material_id(),
+            placement: Placement::IDENTITY,
+            class: None,
+            outline: Some(PanelOutline::Contour { contour: ring }),
+            bevels: vec![bevel],
+        };
+        let before = session.project().revision();
+
+        let id = session
+            .dispatch("panel.create", &json_params(&request))
+            .expect("create the bevelled shelf")
+            .created_id()
+            .expect("an id");
+        let panel = session.project().panel(id).expect("a panel");
+        assert!(panel.is_contour(), "a beveled part is a contour panel");
+        assert_eq!(panel.bevels(), std::slice::from_ref(&bevel), "the bevels travel with the same command");
         assert!(session.project().revision() > before);
 
         session.undo().expect("one undo step");
@@ -633,6 +684,7 @@ mod tests {
             placement: Placement::IDENTITY,
             class: None,
             outline: Some(PanelOutline::Rect { corner_features: vec![feature], edge_bows: Vec::new() }),
+            bevels: Vec::new(),
         };
         let before = session.project().revision();
         let id = session
@@ -677,6 +729,7 @@ mod tests {
             placement: Placement::IDENTITY,
             class: None,
             outline: Some(PanelOutline::Rect { corner_features: features, edge_bows: Vec::new() }),
+            bevels: Vec::new(),
         };
         let before = session.project().revision();
         assert!(session.dispatch("panel.create", &json_params(&request)).is_err(), "the cut leaves no edge");

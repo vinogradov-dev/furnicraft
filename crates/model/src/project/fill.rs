@@ -15,13 +15,40 @@
 //! - [`FillMode::Shape`] takes the **whole section**: the part is the shape the walls allow, and
 //!   [`classify_outline`] decides whether that shape is still a standard panel — a rectangle, a
 //!   rectangle with chamfered corners, a rectangle with radii — before it falls back to a contour.
+//!   A wall that meets the board at an angle gives the outline edge it bounds an **end bevel**
+//!   (ADR 0107): the outline is the section at the wide face, and every edge whose wall tilts gets
+//!   the angle that sets the far face back into the wall's plane, so the board meets a leaned
+//!   board flush instead of cutting in or leaving a wedge of air (ADR 0108).
 //!
 //! Nothing here is stored: the plan is a query, like the niche it starts from.
 
+use std::f64::consts::{FRAC_PI_2, PI};
+
 use furnicraft_geom::{DQuat, DVec2, DVec3};
-use furnicraft_units::Length;
+use furnicraft_units::{Degrees, Length};
 
 use crate::*;
+
+/// How far a wall may lean out of the board's own plane before its end face is not an end face.
+///
+/// A plane whose normal lies this close to the board's thickness axis bounds no outline edge, which
+/// is the same threshold the niche's section cut uses to leave such a plane to its hold test.
+const LEVEL_WALL: f64 = 1.0e-3;
+
+/// How far a measured corner may sit off the wall line it was cut from, in millimetres.
+///
+/// The section's corners are whole micrometres, so a corner is a fraction of one off the exact
+/// intersection of the two lines it came from; five micrometres leaves room and still separates
+/// two walls that are not the same wall.
+const WALL_TOLERANCE: f64 = 5.0e-3;
+
+/// The steepest end face a fill gives its part.
+///
+/// A wall leaned past a mitre is nearer the board's own plane than to a side face, so the "end face"
+/// that would meet it is a taper across the large face — a variable-thickness board, which is not
+/// this feature — and the void it leaves across the slab is a wedge (N12). `Shape` refuses it and
+/// `Fit` stays the safe answer.
+const MAX_FILL_BEVEL: Degrees = Degrees::from_millidegrees(45_000);
 
 /// How a fill tool reads the section the walls leave.
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
@@ -55,6 +82,16 @@ pub struct FillPlan {
     /// It is the shape the ghost draws and the shape the panel occupies: the inscribed rectangle in
     /// [`FillMode::Fit`], the section itself in [`FillMode::Shape`].
     pub corners: Vec<DVec2>,
+    /// The plan's far-face polygon, in the same frame and the same order as [`FillPlan::corners`].
+    ///
+    /// The base ring with every beveled edge set back by its wall's own angle, so the ghost draws
+    /// the rim the finished panel ends at rather than the base rim lifted by the thickness.
+    pub far_corners: Vec<DVec2>,
+    /// The end bevels the walls ask for, in ring-segment order.
+    ///
+    /// Empty when every wall meets the board square, which keeps [`FillMode::Shape`] on the standard
+    /// panel whenever the section is one a rectangle draws. A beveled part is always a contour.
+    pub bevels: Vec<EdgeBevel>,
     /// The smaller end of the part along the free axis, in the parent frame and millimetres.
     pub free_low: f64,
     /// The larger end of the part along the free axis, in the parent frame and millimetres.
@@ -76,6 +113,10 @@ pub enum FillRefusal {
     TooThin,
     /// The void leaves no rectangle, or no ring, large enough to be a panel.
     TooSmall,
+    /// The walls tilt against each other, so no one flat board meets them all.
+    WallsDisagree,
+    /// A wall lies so nearly level with the board that no end bevel can meet it.
+    Wedge,
 }
 
 impl Project {
@@ -113,10 +154,7 @@ impl Project {
         {
             return Err(FillRefusal::TooSmall);
         }
-        let (part, placement) = match fill {
-            Fill::WidthAndDepth => shelf(&niche, local, gap, mode, free)?,
-            Fill::HeightAndDepth => post(&niche, local, gap, mode, free)?,
-        };
+        let (part, placement) = board(&niche, local, gap, mode, free, fill, thickness)?;
         // The free axis is the panel's own thickness axis, so the two ends are its base face and its
         // far face; which of them is lower depends on the stance (ADR 0105).
         let axis = free_axis(fill);
@@ -133,6 +171,8 @@ impl Project {
             placement,
             niche,
             corners: part.corners,
+            far_corners: part.far_corners,
+            bevels: part.bevels,
             free_low,
             free_high,
         })
@@ -155,60 +195,233 @@ struct Part {
     nominal_size: PanelNominalSize,
     /// The base-face polygon in panel-local millimetres.
     corners: Vec<DVec2>,
+    /// The far-face polygon in the same frame and order.
+    far_corners: Vec<DVec2>,
+    /// The end bevels, one per beveled ring segment.
+    bevels: Vec<EdgeBevel>,
 }
 
-/// The shelf a click would create: the footprint the void leaves a board of that thickness.
-fn shelf(
-    niche: &Niche,
-    local: DVec3,
-    gap: f64,
-    mode: FillMode,
-    free: Option<f64>,
-) -> Result<(Part, Placement), FillRefusal> {
-    let low = niche.local_min.z;
-    let high = niche.local_max().z - gap;
-    if high < low {
-        return Err(FillRefusal::TooThin);
-    }
-    let z = free.map_or_else(|| follow(local.z, low, high), |free| free.clamp(low, high));
-    let footprint = niche.cut(2, (z, z + gap), (0, 1)).ok_or(FillRefusal::TooSmall)?;
-    let (part, corner) = part_of(footprint, mode)?;
-    let translation = DVec3::new(corner.x, corner.y, z);
-    let placement = Placement::new(translation, DQuat::IDENTITY).map_err(|_| FillRefusal::NoFrame)?;
-    Ok((part, placement))
-}
-
-/// The post a click would create: the void's height and the depth the void leaves a board.
+/// How a fill's board sits in the product frame: which product axis each local axis runs along.
 ///
-/// The board stands in the post's stance (ADR 0105), so the footprint is the cell cut along the
-/// board's thickness and seen in the panel's own `(x, y)`, which the product's `(z, y)` becomes once
-/// the board is turned: a post stands against a splayed wall with the depth the slab really has.
-fn post(
+/// The shelf is the flat stance, the post is the shelf turned a quarter-turn to the right about `+Y`
+/// (ADR 0105), so the board's own axes are a permutation of the product's with `+1` or `-1` on local
+/// `Y` and `Z`. A fill may turn a board half a turn about its own length axis, which negates both
+/// (ADR 0108), and that is the whole vocabulary this needs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stance {
+    /// The product axis the board's local `X` runs along.
+    u: usize,
+    /// The product axis the board's local `Y` runs along.
+    v: usize,
+    /// The product axis the board's local `Z` (its thickness) runs along.
+    t: usize,
+    /// Whether the board's local `Y` runs against the product's `v` axis.
+    against_y: bool,
+    /// Whether the board's local `Z` runs against the product's `t` axis.
+    against_z: bool,
+    /// Whether the board was turned about its length axis to take the other wide face.
+    other_face: bool,
+    /// The turn the stance applies before any reference-face turn.
+    turn: DQuat,
+}
+
+impl Stance {
+    /// The same axes seen from the other large face: the board turned about its own length axis.
+    const fn turned(self) -> Self {
+        Self { against_y: !self.against_y, against_z: !self.against_z, other_face: !self.other_face, ..self }
+    }
+
+    /// The board's rotation in the product frame.
+    fn rotation(self) -> DQuat {
+        if self.other_face { self.turn * DQuat::from_rotation_x(PI) } else { self.turn }
+    }
+
+    /// The product coordinate of the board's base face for a slab starting at `value`.
+    fn face(self, value: f64, gap: f64) -> f64 {
+        if self.against_z { value + gap } else { value }
+    }
+
+    /// The tilt of a wall's `t` normal in the board's own frame.
+    fn along(self, normal: f64) -> f64 {
+        if self.against_z { -normal } else { normal }
+    }
+}
+
+/// The stance a fill's board takes before the walls decide which face is the wide one.
+fn stance(fill: Fill) -> Stance {
+    match fill {
+        Fill::WidthAndDepth => {
+            Stance { u: 0, v: 1, t: 2, against_y: false, against_z: false, other_face: false, turn: DQuat::IDENTITY }
+        }
+        Fill::HeightAndDepth => Stance {
+            u: 2,
+            v: 1,
+            t: 0,
+            against_y: false,
+            against_z: true,
+            other_face: false,
+            turn: DQuat::from_rotation_y(-FRAC_PI_2),
+        },
+    }
+}
+
+/// The board a click would create in `fill`'s stance: the part and its placement.
+///
+/// `value` is the free-axis position, which is the slab's low end in the product frame; the board
+/// occupies one thickness from there. [`FillMode::Fit`] reads the section the slab takes at both
+/// ends, so it fits whichever way the walls lean; [`FillMode::Shape`] reads the wide face and
+/// bevels every edge whose wall tilts.
+fn board(
     niche: &Niche,
     local: DVec3,
     gap: f64,
     mode: FillMode,
     free: Option<f64>,
+    fill: Fill,
+    thickness: Length,
 ) -> Result<(Part, Placement), FillRefusal> {
-    let low = niche.local_min.x;
-    let high = niche.local_max().x - gap;
+    let stance = stance(fill);
+    let low = niche.local_min[stance.t];
+    let high = niche.local_max()[stance.t] - gap;
     if high < low {
         return Err(FillRefusal::TooThin);
     }
-    let x = free.map_or_else(|| follow(local.x, low, high), |free| free.clamp(low, high));
-    let footprint = niche.cut(0, (x, x + gap), (2, 1)).ok_or(FillRefusal::TooSmall)?;
-    let (part, corner) = part_of(footprint, mode)?;
-    // The post is the shelf turned a quarter-turn to the right about `+Y` (ADR 0105): its local X is
-    // the product's Z, its local Y the product's Y, and its thickness runs back towards the face the
-    // pointer measured, so the node sits one thickness to the `+X` side of that face.
-    let rotation = DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
-    let translation = DVec3::new(x + gap, corner.y, corner.x);
-    let placement = Placement::new(translation, rotation).map_err(|_| FillRefusal::NoFrame)?;
+    let value = free.map_or_else(|| follow(local[stance.t], low, high), |free| free.clamp(low, high));
+    let (stance, polygon, angles) = match mode {
+        FillMode::Fit => {
+            let footprint =
+                niche.cut(stance.t, (value, value + gap), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
+            (stance, footprint, Vec::new())
+        }
+        FillMode::Shape => {
+            let stance = reference_face(niche, value, gap, stance)?;
+            let face = stance.face(value, gap);
+            let section = niche.cut(stance.t, (face, face), (stance.u, stance.v)).ok_or(FillRefusal::TooSmall)?;
+            let angles = wall_bevels(niche, &section, face, &stance);
+            (stance, section, angles)
+        }
+    };
+    let (part, anchor) = part_of(&polygon, mode, &stance, &angles, thickness)?;
+    // The panel's zero corner is the outline's own base corner, which the product frame answers from
+    // the stance: the lower end of each axis the board runs with and the higher one where it runs
+    // against, then the base face along the thickness.
+    let mut translation = DVec3::ZERO;
+    translation[stance.u] = anchor.x;
+    translation[stance.v] = anchor.y;
+    translation[stance.t] = stance.face(value, gap);
+    let placement = Placement::new(translation, stance.rotation()).map_err(|_| FillRefusal::NoFrame)?;
     Ok((part, placement))
 }
 
-/// The part a footprint becomes in `mode`, with the footprint corner the panel is anchored at.
-fn part_of(footprint: Vec<DVec2>, mode: FillMode) -> Result<(Part, DVec2), FillRefusal> {
+/// The stance whose base face is the wide one: the face a cut-only bevel can keep as the outline.
+///
+/// With `n` a wall's free-side normal in the board's own frame, face `B` answers
+/// `n_xy . xy >= offset` and face `A` answers `n_xy . xy >= offset - n_z t`, so a wall with
+/// `n_z < 0` narrows the board at `A` and leaves `B` the wide face. A cell whose walls all tilt the
+/// other way is filled from `A` instead, which is the same board turned half a turn about its own
+/// length axis: a placement, not a new stance (ADR 0108). Walls that disagree leave a void no flat
+/// board fills, and so does a wall so nearly level with the board that its end face would be
+/// steeper than a bevel may be.
+fn reference_face(niche: &Niche, value: f64, gap: f64, stance: Stance) -> Result<Stance, FillRefusal> {
+    let mut cuts = false;
+    let mut grows = false;
+    for plane in &niche.planes {
+        let flat = plane.normal[stance.u].hypot(plane.normal[stance.v]);
+        if flat < LEVEL_WALL {
+            // A plane level with the board bounds no edge of the section; it only has to hold over
+            // the whole slab, or the void is a wedge across the thickness.
+            if [value, value + gap].into_iter().any(|end| plane.normal[stance.t] * end - plane.offset < -WALL_TOLERANCE)
+            {
+                return Err(FillRefusal::Wedge);
+            }
+            continue;
+        }
+        let Some(bevel) = wall_bevel(plane, &stance) else {
+            continue;
+        };
+        if bevel >= MAX_FILL_BEVEL {
+            return Err(FillRefusal::Wedge);
+        }
+        if stance.along(plane.normal[stance.t]) < 0.0 {
+            cuts = true;
+        } else {
+            grows = true;
+        }
+    }
+    match (cuts, grows) {
+        (true, true) => Err(FillRefusal::WallsDisagree),
+        (false, true) => Ok(stance.turned()),
+        _ => Ok(stance),
+    }
+}
+
+/// The bevel one wall asks for, in degrees, or `None` when it meets the board square.
+///
+/// A plane level with the board bounds no edge at all, and an angle that rounds to zero millidegrees
+/// is not storable, so neither gets a record.
+fn wall_bevel(plane: &NichePlane, stance: &Stance) -> Option<Degrees> {
+    let flat = plane.normal[stance.u].hypot(plane.normal[stance.v]);
+    if flat < LEVEL_WALL {
+        return None;
+    }
+    let bevel = Degrees::from_radians((plane.normal[stance.t] / flat).abs().atan())?;
+    (bevel.millidegrees() > 0).then_some(bevel)
+}
+
+/// The bevel each edge of the section asks for, in the section's own corner order.
+///
+/// An edge of a convex section lies on one of the cell's wall lines, so the wall that bounds it is
+/// the plane whose flat normal faces the edge's outward side and whose line the edge's start point
+/// sits on. The plane's normal points into the void and so back at the board, which is why it is the
+/// edge's outward normal turned around. A wall level with the board bounds no edge, so it never
+/// answers one.
+fn wall_bevels(niche: &Niche, section: &[DVec2], face: f64, stance: &Stance) -> Vec<Option<Degrees>> {
+    let mut bevels = Vec::with_capacity(section.len());
+    for index in 0..section.len() {
+        let (Some(start), Some(end)) = (section.get(index), section.get((index + 1) % section.len())) else {
+            bevels.push(None);
+            continue;
+        };
+        let direction = *end - *start;
+        let length = direction.length();
+        let Some(outward) = (length > 1.0e-9).then(|| DVec2::new(direction.y, -direction.x) / length) else {
+            bevels.push(None);
+            continue;
+        };
+        let mut found = None;
+        for plane in &niche.planes {
+            let Some(bevel) = wall_bevel(plane, stance) else {
+                continue;
+            };
+            let flat = DVec2::new(plane.normal[stance.u], plane.normal[stance.v]);
+            let width = flat.length();
+            if width <= 0.0 || !width.is_finite() {
+                continue;
+            }
+            let normal = flat / width;
+            if normal.dot(outward) > -1.0 + 1.0e-6 {
+                continue;
+            }
+            let offset = (plane.offset - plane.normal[stance.t] * face) / width;
+            if (normal.dot(*start) - offset).abs() > WALL_TOLERANCE {
+                continue;
+            }
+            found = Some(bevel);
+            break;
+        }
+        bevels.push(found);
+    }
+    bevels
+}
+
+/// The part a footprint becomes in `mode`, with the section point the panel is anchored at.
+fn part_of(
+    footprint: &[DVec2],
+    mode: FillMode,
+    stance: &Stance,
+    angles: &[Option<Degrees>],
+    thickness: Length,
+) -> Result<(Part, DVec2), FillRefusal> {
     let Some(first) = footprint.first().copied() else {
         return Err(FillRefusal::TooSmall);
     };
@@ -216,9 +429,10 @@ fn part_of(footprint: Vec<DVec2>, mode: FillMode) -> Result<(Part, DVec2), FillR
         return Err(FillRefusal::TooSmall);
     }
     let low = footprint.iter().copied().fold(first, DVec2::min);
+    let high = footprint.iter().copied().fold(first, DVec2::max);
     match mode {
         FillMode::Fit => {
-            let (corner, size) = largest_rectangle(&footprint).ok_or(FillRefusal::TooSmall)?;
+            let (corner, size) = largest_rectangle(footprint).ok_or(FillRefusal::TooSmall)?;
             let nominal_size = PanelNominalSize::new(
                 length_of(size.x).ok_or(FillRefusal::TooSmall)?,
                 length_of(size.y).ok_or(FillRefusal::TooSmall)?,
@@ -227,26 +441,163 @@ fn part_of(footprint: Vec<DVec2>, mode: FillMode) -> Result<(Part, DVec2), FillR
             let corners =
                 vec![DVec2::ZERO, DVec2::new(size.x, 0.0), DVec2::new(size.x, size.y), DVec2::new(0.0, size.y)];
             let outline = PanelOutline::Rect { corner_features: Vec::new(), edge_bows: Vec::new() };
-            Ok((Part { outline, nominal_size, corners }, corner))
+            Ok((
+                Part { outline, nominal_size, corners: corners.clone(), far_corners: corners, bevels: Vec::new() },
+                corner,
+            ))
         }
         FillMode::Shape => {
-            let ring = ring_of(&footprint, low)?;
-            let nominal_size = Panel::contour_size(&ring).map_err(|_| FillRefusal::TooSmall)?;
-            let outline = classify_outline(&ring).unwrap_or(PanelOutline::Contour { contour: ring });
-            let corners = footprint.iter().map(|point| *point - low).collect();
-            Ok((Part { outline, nominal_size, corners }, low))
+            let ring = local_ring(footprint, angles, stance, low, high);
+            let contour = contour_of(&ring.points)?;
+            let nominal_size = Panel::contour_size(&contour).map_err(|_| FillRefusal::TooSmall)?;
+            let mut bevels = Vec::new();
+            for (index, bevel) in ring.bevels.iter().enumerate() {
+                let Some(bevel) = *bevel else {
+                    continue;
+                };
+                let Some(segment) = contour.id_at(index) else {
+                    return Err(FillRefusal::TooSmall);
+                };
+                let record = EdgeBevel::new(EdgeRef::Ring { segment }, bevel).map_err(|_| FillRefusal::Wedge)?;
+                bevels.push(record);
+            }
+            // A beveled board is a contour whatever its polygon looks like: the rectangle generator
+            // has no place for an end bevel, so the classifier only serves the square cases.
+            let outline = if bevels.is_empty() {
+                classify_outline(&contour).unwrap_or(PanelOutline::Contour { contour })
+            } else {
+                PanelOutline::Contour { contour }
+            };
+            let far_corners = far_face(&outline, &bevels, &ring.points, thickness)?;
+            let anchor = DVec2::new(low.x, if stance.against_y { high.y } else { low.y });
+            Ok((Part { outline, nominal_size, corners: ring.points, far_corners, bevels }, anchor))
         }
     }
 }
 
-/// The footprint as the document ring a panel stores, anchored at `low`.
-fn ring_of(footprint: &[DVec2], low: DVec2) -> Result<Contour, FillRefusal> {
-    let corners = footprint
+/// A section in the panel's own plane, anchored at its zero corner, with the bevel on each edge.
+struct LocalRing {
+    /// The ring's corners, counter-clockwise from the panel's zero corner.
+    points: Vec<DVec2>,
+    /// The bevel the edge from `points[i]` to the next corner asks for, if any.
+    bevels: Vec<Option<Degrees>>,
+}
+
+/// The section as the panel's own ring.
+///
+/// The board's own `Y` may run against the section's second axis, which mirrors the polygon and so
+/// reverses its travel direction; the ring is turned back round, and each bevel travels with the
+/// edge it belongs to so the two stay in step.
+fn local_ring(footprint: &[DVec2], angles: &[Option<Degrees>], stance: &Stance, low: DVec2, high: DVec2) -> LocalRing {
+    let mut points: Vec<DVec2> = footprint
         .iter()
-        .map(|point| Some([document_length(point.x - low.x)?, document_length(point.y - low.y)?]))
+        .map(|point| DVec2::new(point.x - low.x, if stance.against_y { high.y - point.y } else { point.y - low.y }))
+        .collect();
+    let mut bevels: Vec<Option<Degrees>> =
+        (0..footprint.len()).map(|index| angles.get(index).copied().flatten()).collect();
+    if stance.against_y {
+        let count = points.len();
+        points = (0..count).filter_map(|index| points.get((count - index) % count).copied()).collect();
+        bevels = (0..count).filter_map(|index| bevels.get((count - 1 - index) % count).copied()).collect();
+    }
+    LocalRing { points, bevels }
+}
+
+/// The section as the document ring a panel stores, anchored at `(0, 0)`.
+fn contour_of(points: &[DVec2]) -> Result<Contour, FillRefusal> {
+    let corners = points
+        .iter()
+        .map(|point| Some([document_length(point.x)?, document_length(point.y)?]))
         .collect::<Option<Vec<_>>>()
         .ok_or(FillRefusal::TooSmall)?;
     Contour::from_polygon(corners).map_err(|_| FillRefusal::TooSmall)
+}
+
+/// The far face's polygon: the base ring with every beveled edge set back by its own angle.
+fn far_face(
+    outline: &PanelOutline,
+    bevels: &[EdgeBevel],
+    corners: &[DVec2],
+    thickness: Length,
+) -> Result<Vec<DVec2>, FillRefusal> {
+    let Some(ring) = outline.contour() else {
+        return Ok(corners.to_vec());
+    };
+    let mut setbacks = vec![0.0; corners.len()];
+    for bevel in bevels {
+        let EdgeRef::Ring { segment } = bevel.source() else {
+            continue;
+        };
+        let Some(index) = ring.index_of(segment) else {
+            continue;
+        };
+        let Some(slot) = setbacks.get_mut(index) else {
+            continue;
+        };
+        *slot = bevel.setback(thickness).ok_or(FillRefusal::Wedge)?.millimetres_f64();
+    }
+    set_back(corners, &setbacks).ok_or(FillRefusal::TooSmall)
+}
+
+/// A convex ring with each edge's line moved into the body by that edge's own distance.
+///
+/// The moved lines meet at the inset corners, so the result is the ring the far face keeps. A ring
+/// that collapses answers `None`.
+fn set_back(corners: &[DVec2], setbacks: &[f64]) -> Option<Vec<DVec2>> {
+    let count = corners.len();
+    if count < 3 || setbacks.len() != count {
+        return None;
+    }
+    let mut lines: Vec<(DVec2, DVec2)> = Vec::with_capacity(count);
+    for index in 0..count {
+        let start = *corners.get(index)?;
+        let end = *corners.get((index + 1) % count)?;
+        let direction = end - start;
+        let length = direction.length();
+        if !length.is_finite() || length <= 1.0e-9 {
+            return None;
+        }
+        let inward = DVec2::new(-direction.y, direction.x) / length;
+        let setback = *setbacks.get(index)?;
+        if !setback.is_finite() || setback < 0.0 {
+            return None;
+        }
+        lines.push((start + inward * setback, direction / length));
+    }
+    let mut points = Vec::with_capacity(count);
+    for index in 0..count {
+        let (previous, previous_direction) = *lines.get((index + count - 1) % count)?;
+        let (current, current_direction) = *lines.get(index)?;
+        let denominator = previous_direction.x * current_direction.y - previous_direction.y * current_direction.x;
+        if !denominator.is_finite() {
+            return None;
+        }
+        if denominator.abs() < 1.0e-9 {
+            // Two edges in line: their moved lines are one line, and its start point is on it.
+            points.push(current);
+            continue;
+        }
+        let across = current - previous;
+        let step = (across.x * current_direction.y - across.y * current_direction.x) / denominator;
+        let point = previous + previous_direction * step;
+        if !point.is_finite() {
+            return None;
+        }
+        points.push(point);
+    }
+    (area2(&points) > 1.0e-9).then_some(points)
+}
+
+/// The signed area of a polygon, positive when its corners run counter-clockwise.
+fn area2(points: &[DVec2]) -> f64 {
+    let mut total = 0.0;
+    for index in 0..points.len() {
+        let (Some(start), Some(end)) = (points.get(index), points.get((index + 1) % points.len())) else {
+            continue;
+        };
+        total += start.x * end.y - end.x * start.y;
+    }
+    total * 0.5
 }
 
 /// The largest axis-aligned rectangle inside a convex polygon, as its low corner and its size.
@@ -489,6 +840,181 @@ mod tests {
         project.fill_plan(product, centre(project, product), fill, mode, thickness, None)
     }
 
+    /// A board standing as a wall across the case's back, its inner face through `y = through` at
+    /// `z = 0` and leaned by `degrees` about `+X`.
+    ///
+    /// The free space is in front of it. A positive lean brings the face forward as it rises, so the
+    /// void narrows towards the top; a negative one widens it.
+    fn leaned_wall(project: &mut Project, product: Id, through: f64, degrees: f64) {
+        let lean = degrees.to_radians();
+        let wall = DQuat::from_rotation_z(-FRAC_PI_2) * DQuat::from_rotation_y(-FRAC_PI_2);
+        let rotation = DQuat::from_rotation_x(lean) * wall;
+        let placement = Placement::new(DVec3::new(0.0, through, 0.0), rotation).expect("a wall placement");
+        // The wall stance runs its length up the case and its width across it, so the nominal size
+        // is the case's height by its width; the panel is longer than the case so its face still
+        // covers the whole void once it leans.
+        let nominal = PanelNominalSize::new(millimetres(1600), millimetres(600)).expect("a wall size");
+        project.add_panel(product, "Wall", nominal, None, millimetres(18), placement).expect("add a wall");
+    }
+
+    /// A board leaning 10 degrees over the case, its underside the void's ceiling.
+    fn leaned_ceiling(project: &mut Project, product: Id) {
+        let lean = 10.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        let along = DVec3::new(0.0, cos, -sin);
+        let away = DVec3::new(0.0, sin, cos);
+        let rotation = DQuat::from_rotation_axes(along.cross(away), along, away);
+        let placement = Placement::new(DVec3::new(0.0, 0.0, 699.5), rotation).expect("a ceiling placement");
+        let nominal = PanelNominalSize::new(millimetres(600), millimetres(620)).expect("a ceiling size");
+        project.add_panel(product, "Ceiling", nominal, None, millimetres(18), placement).expect("add a ceiling");
+    }
+
+    /// Whether both faces of the plan's body lie inside the void it was measured against.
+    fn inside(plan: &FillPlan, thickness: Length) -> bool {
+        const TOLERANCE: f64 = 2.0e-3;
+        let gap = thickness.millimetres_f64();
+        let mut points = Vec::new();
+        for (corners, z) in [(&plan.corners, 0.0), (&plan.far_corners, gap)] {
+            for corner in corners {
+                points.push(plan.placement.transform_point(DVec3::new(corner.x, corner.y, z)));
+            }
+        }
+        points.iter().all(|point| {
+            point.is_finite()
+                && plan.niche.planes.iter().all(|plane| plane.normal.dot(*point) - plane.offset >= -TOLERANCE)
+        })
+    }
+
+    /// The base ring's edge that carries `bevel`, as its two corners in panel-local millimetres.
+    fn beveled_edge(plan: &FillPlan, bevel: EdgeBevel) -> (DVec2, DVec2) {
+        let ring = plan.outline.contour().expect("a beveled part is a contour");
+        let EdgeRef::Ring { segment } = bevel.source() else {
+            panic!("a fill bevels ring segments");
+        };
+        let index = ring.index_of(segment).expect("the bevel names a segment of the ring");
+        let count = plan.corners.len();
+        (plan.corners[index], plan.corners[(index + 1) % count])
+    }
+
+    /// How far the far edge under `bevel` sits from the wall plane `normal . p = offset`, in mm.
+    fn far_edge_distance(plan: &FillPlan, bevel: EdgeBevel, normal: DVec3, offset: f64, thickness: Length) -> f64 {
+        let (start, end) = beveled_edge(plan, bevel);
+        let direction = end - start;
+        let length = direction.length();
+        let inward = DVec2::new(-direction.y, direction.x) / length;
+        let setback = bevel.setback(thickness).expect("a setback").millimetres_f64();
+        let gap = thickness.millimetres_f64();
+        let mut worst: f64 = 0.0;
+        for corner in [start, end] {
+            let moved = corner + inward * setback;
+            let point = plan.placement.transform_point(DVec3::new(moved.x, moved.y, gap));
+            worst = worst.max((normal.dot(point) - offset).abs());
+        }
+        worst
+    }
+
+    #[test]
+    fn a_shelf_against_a_leaned_wall_gets_the_walls_own_bevel() {
+        let (mut project, product) = empty_product(600, 560, 720);
+        leaned_wall(&mut project, product, 560.0, 10.0);
+        let thickness = millimetres(18);
+        let shaped = plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness).expect("a shaped shelf");
+        assert!(shaped.outline.contour().is_some(), "a beveled board is a contour whatever its polygon looks like");
+        assert_eq!(shaped.bevels.len(), 1, "only the leaning wall asks for one: {:?}", shaped.bevels);
+        let bevel = shaped.bevels[0];
+        assert_eq!(bevel.angle().millidegrees(), 10_000, "the wall's own lean");
+        let lean = 10.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        // The wall's free-side normal and the offset of its plane through (0, 560, 0).
+        let normal = DVec3::new(0.0, -cos, -sin);
+        let distance = far_edge_distance(&shaped, bevel, normal, normal.dot(DVec3::new(0.0, 560.0, 0.0)), thickness);
+        assert!(distance <= 1.0e-3, "the far edge lies in the wall's plane, off by {distance} mm");
+        assert!(inside(&shaped, thickness), "and the whole board stays in the void");
+        assert!(shaped.placement.transform_vector(DVec3::Z).z > 0.0, "face B is the wide one, so the board stands");
+
+        // A plumb wall in the same case asks for nothing and keeps the standard panel.
+        let (mut project, product) = empty_product(600, 560, 720);
+        leaned_wall(&mut project, product, 560.0, 0.0);
+        let square = plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness).expect("a square shelf");
+        assert!(square.bevels.is_empty(), "a plumb wall needs no bevel: {:?}", square.bevels);
+        assert_eq!(square.corners, square.far_corners, "so the far face is the base rim lifted");
+        assert!(matches!(square.outline, PanelOutline::Rect { .. }), "and the part is the standard panel");
+    }
+
+    #[test]
+    fn a_wall_leaned_the_other_way_turns_the_board_and_still_meets_it() {
+        let (mut project, product) = empty_product(600, 560, 720);
+        // The wall stands inside the case, so its face keeps bounding the void as it leans back.
+        leaned_wall(&mut project, product, 400.0, -10.0);
+        let thickness = millimetres(18);
+        let shaped = plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness).expect("a shaped shelf");
+        assert_eq!(shaped.bevels.len(), 1, "the wall still asks for its one bevel: {:?}", shaped.bevels);
+        let bevel = shaped.bevels[0];
+        assert_eq!(bevel.angle().millidegrees(), 10_000, "the same angle from the other side");
+        // The wide face is the top here, so the board is turned about its length axis to keep the
+        // broad face as the stored outline (ADR 0108).
+        assert!(shaped.placement.transform_vector(DVec3::Z).z < 0.0, "the board is turned: {:?}", shaped.placement);
+        let lean = 10.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        let normal = DVec3::new(0.0, -cos, sin);
+        let distance = far_edge_distance(&shaped, bevel, normal, normal.dot(DVec3::new(0.0, 400.0, 0.0)), thickness);
+        assert!(distance <= 1.0e-3, "the far edge lies in the wall's plane, off by {distance} mm");
+        assert!(inside(&shaped, thickness), "and the whole board stays in the void");
+    }
+
+    #[test]
+    fn a_void_whose_walls_lean_against_each_other_has_no_flat_board() {
+        let shelf = stance(Fill::WidthAndDepth);
+        let lean = 10.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        let narrows = NichePlane { normal: DVec3::new(0.0, -cos, -sin), offset: -cos * 100.0 };
+        let widens = NichePlane { normal: DVec3::new(0.0, -cos, sin), offset: -cos * 500.0 };
+        let floor = NichePlane { normal: DVec3::Z, offset: 0.0 };
+        let walls = |planes: Vec<NichePlane>| Niche {
+            product: Id::new(1).expect("an id"),
+            local_min: DVec3::ZERO,
+            size: DVec3::new(600.0, 560.0, 720.0),
+            min: DVec3::ZERO,
+            shape: NicheShape::Sloped,
+            planes,
+            corners: Vec::new(),
+        };
+        assert_eq!(
+            reference_face(&walls(vec![narrows, widens, floor]), 100.0, 18.0, shelf),
+            Err(FillRefusal::WallsDisagree),
+            "one wall narrows the board at face A and the other widens it there"
+        );
+        assert_eq!(
+            reference_face(&walls(vec![NichePlane { normal: DVec3::Z, offset: 110.0 }]), 100.0, 18.0, shelf),
+            Err(FillRefusal::Wedge),
+            "a floor inside the slab leaves no board at any face"
+        );
+        assert!(
+            reference_face(&walls(vec![widens, floor]), 100.0, 18.0, shelf).is_ok_and(|stance| stance.other_face),
+            "a wall that widens alone turns the board"
+        );
+        assert!(
+            reference_face(&walls(vec![narrows, floor]), 100.0, 18.0, shelf).is_ok_and(|stance| !stance.other_face),
+            "and one that narrows leaves it as it stands"
+        );
+    }
+
+    #[test]
+    fn a_shelf_under_a_leaned_ceiling_is_a_wedge_in_the_shape_mode() {
+        let (mut project, product) = empty_product(600, 560, 720);
+        leaned_ceiling(&mut project, product);
+        let thickness = millimetres(18);
+        assert_eq!(
+            plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, thickness),
+            Err(FillRefusal::Wedge),
+            "a ceiling nearly parallel to the board needs a taper, not an end face"
+        );
+        assert!(
+            plan(&project, product, Fill::WidthAndDepth, FillMode::Fit, thickness).is_ok(),
+            "the largest fit stays the safe answer"
+        );
+    }
+
     #[test]
     fn a_trapezoid_fits_the_largest_rectangle_and_takes_its_ring_as_the_shape() {
         let (project, product) = splayed_product();
@@ -509,6 +1035,7 @@ mod tests {
         assert_eq!(ring.entries().len(), 4, "the trapezoid is stored as the ring the walls leave");
         assert_eq!(shaped.nominal_size, PanelNominalSize::new(millimetres(400), millimetres(560)).expect("a size"));
         assert!(shaped.corners.len() > 4 || !is_rectangle(&shaped.corners), "the shape is not the rectangle");
+        assert!(shaped.bevels.is_empty(), "the posts stand plumb, so no edge needs a bevel");
     }
 
     /// Whether a polygon is the rectangle around it, for the shape-mode assertion above.
@@ -534,6 +1061,8 @@ mod tests {
             let plan = plan(&project, product, Fill::WidthAndDepth, mode, thickness).expect("a plan");
             assert_eq!(plan.nominal_size, PanelNominalSize::new(millimetres(600), millimetres(560)).expect("a size"));
             assert!(matches!(plan.outline, PanelOutline::Rect { .. }), "{mode:?} keeps the rectangle panel");
+            assert!(plan.bevels.is_empty(), "{mode:?} asks for no bevel in a square void");
+            assert_eq!(plan.corners, plan.far_corners, "{mode:?} ends the board over its own rim");
             outlines.push((plan.outline, plan.corners));
         }
         assert_eq!(outlines.first(), outlines.last(), "a rectangular void answers the same part either way");
@@ -634,6 +1163,24 @@ mod tests {
         assert!(largest_rectangle(&[DVec2::ZERO, DVec2::new(100.0, 0.0)]).is_none());
         let line = vec![DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(200.0, 0.0)];
         assert!(largest_rectangle(&line).is_none(), "a line leaves no height");
+    }
+
+    #[test]
+    fn a_turned_board_keeps_its_length_axis_and_takes_the_other_face() {
+        for fill in [Fill::WidthAndDepth, Fill::HeightAndDepth] {
+            let stance = stance(fill);
+            let turned = stance.turned();
+            let (standing, over) = (stance.rotation(), turned.rotation());
+            // The length axis is untouched, which is what makes the turn a placement of the same
+            // stance rather than a fourth one (ADR 0105, ADR 0108).
+            assert!((over.mul_vec3(DVec3::X) - standing.mul_vec3(DVec3::X)).length() <= 1.0e-9, "{fill:?}");
+            assert!((over.mul_vec3(DVec3::Z) + standing.mul_vec3(DVec3::Z)).length() <= 1.0e-9, "{fill:?}");
+            assert!((over.mul_vec3(DVec3::Y) + standing.mul_vec3(DVec3::Y)).length() <= 1.0e-9, "{fill:?}");
+            // The base face moves to the other end of the slab the board takes.
+            let (first, other) = if stance.against_z { (28.0, 10.0) } else { (10.0, 28.0) };
+            assert!((stance.face(10.0, 18.0) - first).abs() <= 1.0e-9, "{fill:?}");
+            assert!((turned.face(10.0, 18.0) - other).abs() <= 1.0e-9, "{fill:?}");
+        }
     }
 
     #[test]
