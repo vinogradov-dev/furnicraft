@@ -23,8 +23,8 @@ use std::sync::Arc;
 use furnicraft_geom::{DVec3, MeshData, triangulate_face};
 use furnicraft_kernel::{BodyId, KernelError, SolidKernel, TessOptions};
 use furnicraft_model::{
-    BandingSpec, Constructive, CornerBanding, EdgeBanding, Id, Machining, Mesh, Object, Panel, PanelGeometry,
-    PanelNominalSize, PanelOutline, Path, Primitive, Revision, RingBanding, SegmentSource,
+    BandingSpec, Constructive, CornerBanding, EdgeBanding, EdgeBevel, Id, Machining, Mesh, Object, Panel,
+    PanelGeometry, PanelNominalSize, PanelOutline, Path, Primitive, Revision, RingBanding, SegmentSource,
 };
 use furnicraft_param::{EdgeBandProfile, ParamError, build_constructive_mesh, build_panel_parts_with};
 use thiserror::Error;
@@ -363,6 +363,7 @@ struct PanelInputs {
     corner_banding: Vec<CornerBanding>,
     ring_banding: Vec<RingBanding>,
     band_order: Vec<SegmentSource>,
+    bevels: Vec<EdgeBevel>,
     thickness: furnicraft_units::Length,
     profiles: Vec<(BandingSpec, EdgeBandProfile)>,
 }
@@ -387,6 +388,7 @@ impl PanelInputs {
             corner_banding: panel.corner_banding().to_vec(),
             ring_banding: panel.ring_banding().to_vec(),
             band_order: panel.band_order().to_vec(),
+            bevels: panel.bevels().to_vec(),
             thickness: geometry.thickness(),
             profiles,
         }
@@ -406,6 +408,7 @@ impl PanelInputs {
             && self.corner_banding.as_slice() == panel.corner_banding()
             && self.ring_banding.as_slice() == panel.ring_banding()
             && self.band_order.as_slice() == panel.band_order()
+            && self.bevels.as_slice() == panel.bevels()
             && self.thickness == geometry.thickness()
             && self.profiles.iter().all(|(spec, known)| profile(spec) == *known)
     }
@@ -709,10 +712,10 @@ mod tests {
 
     use furnicraft_kernel::{BooleanOp, Measure, Profile};
     use furnicraft_kernel_truck::TruckKernel;
-    use furnicraft_model::{Contour, EdgeId, Id, Panel, PanelNominalSize, Placement};
+    use furnicraft_model::{Contour, EdgeBevel, EdgeId, EdgeRef, Id, Panel, PanelNominalSize, Placement, RectEdge};
     use furnicraft_param::build_panel;
     use furnicraft_testkit::millimetres;
-    use furnicraft_units::Length;
+    use furnicraft_units::{Degrees, Length};
 
     use super::*;
 
@@ -1142,6 +1145,44 @@ mod tests {
         );
         assert_eq!(cache.built_at(first), Some(revision));
         assert_eq!(cache.built_at(second), Some(Revision::ZERO));
+    }
+
+    #[test]
+    fn a_changed_bevel_angle_rebuilds_the_panel() {
+        // A bevel is a body feature folded after the extrusion, so the cache must compare it like
+        // the outline and the banding. Without it the document revision moved but the old mesh was
+        // reused, and the card's angle changed nothing on screen.
+        use furnicraft_model::Project;
+
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let mut project: Project = crate::tests::project_with_two_panels();
+        let id = Id::new(1).expect("id");
+        let source = EdgeRef::Rect { edge: RectEdge::Bottom.id() };
+        let bevel = |millidegrees| EdgeBevel::new(source, Degrees::from_millidegrees(millidegrees)).expect("a bevel");
+        project.set_panel_bevel(id, bevel(20_000)).expect("the first bevel");
+
+        let panel = project.panel(id).expect("panel").clone();
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        cache.start();
+        let before = cache
+            .panel(project.revision(), &panel, &geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("the first body");
+        cache.finish();
+
+        project.set_panel_bevel(id, bevel(40_000)).expect("the second angle");
+        let panel = project.panel(id).expect("panel").clone();
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        cache.start();
+        let after = cache
+            .panel(project.revision(), &panel, &geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("the second body");
+        cache.finish();
+
+        assert!(
+            !Arc::ptr_eq(before.body().expect("first"), after.body().expect("second")),
+            "the new angle is a new body"
+        );
     }
 
     #[test]
