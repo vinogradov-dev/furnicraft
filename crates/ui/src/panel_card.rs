@@ -5,21 +5,23 @@
 
 use egui::{ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
-    BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
-    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, OUTLINE_CONTOUR_ID, RENAME_ID, RESIZE_ID,
-    RING_BANDING_CLEAR_ID, RING_BANDING_SET_ID,
+    BEVEL_CLEAR_ID, BEVEL_SET_ID, BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID,
+    CORNER_CLEAR_ID, CORNER_SET_ID, EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, OUTLINE_CONTOUR_ID,
+    RENAME_ID, RESIZE_ID, RING_BANDING_CLEAR_ID, RING_BANDING_SET_ID,
 };
 use furnicraft_engine::{
-    Dimension, EditScope, NodeRules, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet,
-    PanelCornerClear, PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
-    PanelOutlineToContour, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
+    Dimension, EditScope, NodeRules, PanelBevelClear, PanelBevelSet, PanelBowClear, PanelBowSet,
+    PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet, PanelDiagnostic,
+    PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelOutlineToContour, PanelRename, PanelResize,
+    PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
-    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Extent, Id, MachiningId,
-    MaterialId, Operation, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
+    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, EdgeRef, Extent, Id,
+    MAX_BEVEL_ANGLE, MachiningId, MaterialId, Operation, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding,
+    SegmentSource, VertexId,
 };
 use furnicraft_text::Message;
-use furnicraft_units::Length;
+use furnicraft_units::{Degrees, Length};
 use serde_json::Value;
 
 use crate::command::{dispatch as dispatch_command, json};
@@ -124,6 +126,15 @@ enum Action {
     ClearBow {
         panel: Id,
         edge: EdgeId,
+    },
+    SetBevel {
+        panel: Id,
+        source: EdgeRef,
+        angle: Degrees,
+    },
+    ClearBevel {
+        panel: Id,
+        source: EdgeRef,
     },
     ToContour {
         panel: Id,
@@ -480,7 +491,48 @@ impl PanelCard {
                 self.show_bowed_edges(ui, panel_id, panel, actions);
             });
         }
+        section(ui, "panel.shape.bevels", Message::SectionBevels.text(lang), true, |ui| {
+            self.show_bevels(ui, panel_id, panel, actions);
+        });
         request
+    }
+
+    /// Draws one row per straight outline edge that can take an end bevel.
+    ///
+    /// A bowed edge and an arc segment are left out: their end face is curved, and the command
+    /// would refuse them. A field at zero clears the bevel, which is the same gesture as the
+    /// *Clear* button, so an unset edge needs no second control.
+    fn show_bevels(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        let lang = crate::language(ui.ctx());
+        let mut rows = 0;
+        for (source, label) in bevel_sources(panel, lang) {
+            rows += 1;
+            let current = panel.bevel_at(source);
+            ui.horizontal(|ui| {
+                ui.label(label);
+                let (committed, _) = degrees_field(
+                    ui,
+                    current.map_or(Degrees::ZERO, |bevel| bevel.angle()),
+                    0.0..=MAX_BEVEL_ANGLE.degrees_f64() - 0.1,
+                );
+                if let Some(degrees) = committed.and_then(angle_in_band) {
+                    if degrees == Degrees::ZERO {
+                        if current.is_some() {
+                            actions.push(Action::ClearBevel { panel: panel_id, source });
+                        }
+                    } else if current.is_none_or(|bevel| bevel.angle() != degrees) {
+                        actions.push(Action::SetBevel { panel: panel_id, source, angle: degrees });
+                    }
+                }
+                if current.is_some() && ui.button(Message::Clear.text(lang)).clicked() {
+                    actions.push(Action::ClearBevel { panel: panel_id, source });
+                }
+            });
+        }
+        if rows == 0 {
+            ui.label(Message::NoBevelledEnds.text(lang));
+        }
+        ui.label(Message::BevelAngleHint.text(lang));
     }
 
     fn show_outline(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
@@ -775,6 +827,14 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
             let params = json(&PanelBowClear { panel: *panel, edge: *edge })?;
             dispatch(session, BOW_CLEAR_ID, &params)
         }
+        Action::SetBevel { panel, source, angle } => {
+            let params = json(&PanelBevelSet { panel: *panel, source: *source, angle: *angle })?;
+            dispatch(session, BEVEL_SET_ID, &params)
+        }
+        Action::ClearBevel { panel, source } => {
+            let params = json(&PanelBevelClear { panel: *panel, source: *source })?;
+            dispatch(session, BEVEL_CLEAR_ID, &params)
+        }
         Action::ToContour { panel } => {
             let params = json(&PanelOutlineToContour { panel: *panel })?;
             dispatch(session, OUTLINE_CONTOUR_ID, &params)
@@ -860,6 +920,59 @@ pub(crate) fn positive_length(millimetres: f64) -> Option<Length> {
 
 pub(crate) fn signed_length(millimetres: f64) -> Option<Length> {
     scrub::millimetres(millimetres)
+}
+
+/// A degree value that lives in the document, read from a field whose unit is the degree.
+pub(crate) fn angle_in_band(degrees: f64) -> Option<Degrees> {
+    if !degrees.is_finite() {
+        return None;
+    }
+    let millidegrees = (degrees * 1_000.0).round();
+    if !(0.0..=f64::from(i32::MAX)).contains(&millidegrees) {
+        return None;
+    }
+    Some(Degrees::from_millidegrees(millidegrees as i64))
+}
+
+/// A degree angle edited by the shared field, with the unit outside the box.
+pub(crate) fn degrees_field(
+    ui: &mut Ui,
+    value: Degrees,
+    range: std::ops::RangeInclusive<f64>,
+) -> (Option<f64>, egui::Response) {
+    let mut degrees = value.degrees_f64();
+    let outcome = Scrub::new(&mut degrees)
+        .speed(0.2)
+        .range(range)
+        .decimals(2)
+        .unit("°")
+        .parse(scrub::parse_degrees)
+        .policy(CommitPolicy::OnRelease)
+        .show(ui);
+    (outcome.commit.then_some(degrees), outcome.response)
+}
+
+/// The outline edges that can take an end bevel, with the label the card shows for each.
+///
+/// A rectangle names its four edges, except one that carries a bow: a bowed edge is drawn as an arc,
+/// and an arc has no plane end face. A contour ring names its straight segments for the same reason.
+fn bevel_sources(panel: &Panel, lang: crate::Lang) -> Vec<(EdgeRef, String)> {
+    if let Some(contour) = panel.outline_contour() {
+        return contour
+            .entries()
+            .iter()
+            .filter(|entry| !entry.segment().is_arc())
+            .map(|entry| {
+                let label = Message::SegmentWith.with(lang, [entry.id().get()]);
+                (EdgeRef::Ring { segment: entry.id() }, label)
+            })
+            .collect();
+    }
+    RectEdge::ALL
+        .iter()
+        .filter(|edge| panel.edge_bow(edge.id()).is_none())
+        .map(|edge| (EdgeRef::Rect { edge: edge.id() }, edge_label(edge.id().get()).text(lang).to_owned()))
+        .collect()
 }
 
 /// Formats one derived panel issue for the card.
@@ -1525,6 +1638,147 @@ mod tests {
                 .edge_banding()
                 .iter()
                 .any(|band| band.edge() == RectEdge::Bottom.id())
+        );
+    }
+
+    #[test]
+    fn bevel_actions_dispatch_through_the_engine() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let source = EdgeRef::Rect { edge: RectEdge::Bottom.id() };
+
+        run_action(
+            &mut session,
+            &Action::SetBevel { panel: panel_id, source, angle: Degrees::from_millidegrees(30_000) },
+        )
+        .expect("set the bevel");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(panel.bevel_at(source).map(|bevel| bevel.angle()), Some(Degrees::from_millidegrees(30_000)));
+
+        run_action(&mut session, &Action::ClearBevel { panel: panel_id, source }).expect("clear the bevel");
+        assert!(session.project().panel(panel_id).expect("panel").bevels().is_empty());
+
+        // A banded edge has no square face left, and the card shows the engine's sentence.
+        run_action(
+            &mut session,
+            &Action::SetBand {
+                panel: panel_id,
+                edge: RectEdge::Bottom.id(),
+                material: furnicraft_testkit::sample_edge_material_id(),
+                included_in_size: false,
+            },
+        )
+        .expect("band the bottom edge");
+        let error = run_action(
+            &mut session,
+            &Action::SetBevel { panel: panel_id, source, angle: Degrees::from_millidegrees(30_000) },
+        )
+        .expect_err("a banded edge cannot be beveled");
+        assert!(error.contains("banded"), "error was {error}");
+    }
+
+    #[test]
+    fn the_bevel_rows_cover_straight_edges_only() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(
+            bevel_sources(panel, crate::Lang::En).iter().map(|(source, _)| *source).collect::<Vec<_>>(),
+            vec![
+                EdgeRef::Rect { edge: RectEdge::Bottom.id() },
+                EdgeRef::Rect { edge: RectEdge::Right.id() },
+                EdgeRef::Rect { edge: RectEdge::Top.id() },
+                EdgeRef::Rect { edge: RectEdge::Left.id() },
+            ]
+        );
+
+        // A bow draws its edge as an arc, so that edge is not offered.
+        run_action(
+            &mut session,
+            &Action::SetBow {
+                panel: panel_id,
+                edge: RectEdge::Right.id(),
+                sagitta: Length::from_millimetres(6).expect("bow"),
+            },
+        )
+        .expect("bow the right edge");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(
+            !bevel_sources(panel, crate::Lang::En)
+                .iter()
+                .any(|(source, _)| *source == EdgeRef::Rect { edge: RectEdge::Right.id() })
+        );
+    }
+
+    /// One frame of the card's bevel rows.
+    fn bevel_frame(
+        context: &mut egui::Context,
+        session: &Session,
+        panel_id: Id,
+        events: Vec<egui::Event>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                if let Some(panel) = session.project().panel(panel_id) {
+                    PanelCard::default().show_bevels(ui, panel_id, panel, &mut actions);
+                }
+            },
+        );
+        output.textures_delta.clear();
+        actions
+    }
+
+    #[test]
+    fn typing_an_angle_writes_the_bevel_and_zero_clears_it() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let source = EdgeRef::Rect { edge: RectEdge::Bottom.id() };
+        let mut context = egui::Context::default();
+
+        bevel_frame(&mut context, &session, panel_id, Vec::new());
+        bevel_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Tab)]);
+        bevel_frame(&mut context, &session, panel_id, Vec::new());
+        let typed = bevel_frame(&mut context, &session, panel_id, vec![egui::Event::Text("30".to_owned())]);
+        assert!(typed.is_empty(), "typing must not dispatch before the edit ends");
+        let mut actions = bevel_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Enter)]);
+        actions.extend(bevel_frame(&mut context, &session, panel_id, Vec::new()));
+
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                Action::SetBevel { source: edited, angle, .. }
+                    if *edited == source && *angle == Degrees::from_millidegrees(30_000)
+            )),
+            "typing 30 must write a 30 degree bevel on the bottom edge, got {actions:?}"
+        );
+
+        // The document now holds the bevel, so the card offers the value the document has.
+        for action in &actions {
+            run_action(&mut session, action).expect("apply the typed bevel");
+        }
+        assert!(session.project().panel(panel_id).expect("panel").bevel_at(source).is_some());
+
+        // Typing zero on a set edge clears it, the same as the button does.
+        bevel_frame(&mut context, &session, panel_id, Vec::new());
+        bevel_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Tab)]);
+        bevel_frame(&mut context, &session, panel_id, Vec::new());
+        bevel_frame(&mut context, &session, panel_id, vec![egui::Event::Text("0".to_owned())]);
+        let mut clearing = bevel_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Enter)]);
+        clearing.extend(bevel_frame(&mut context, &session, panel_id, Vec::new()));
+        assert!(
+            clearing
+                .iter()
+                .any(|action| matches!(action, Action::ClearBevel { source: edited, .. } if *edited == source)),
+            "typing 0 must clear the bevel, got {clearing:?}"
         );
     }
 

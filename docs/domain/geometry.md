@@ -122,22 +122,36 @@ primitive is described in section 5.
   `Geometry::Primitive(Primitive)` (schema 18). It is never a mesh: the mesh is derived on read
   ([0054](../decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md)).
 - The inner tag is `shape`, because the outer payload already carries `kind`. The variants are
-  `cube { edge }`, `cylinder { radius, height, segments }` and `sphere { radius, segments, bands }`.
-- The parameter set is the shape's own. A cube has one edge and always six faces; only the curved
-  shapes have a face count, and only a sphere has latitude bands. There is no generic tessellation
-  field shared by shapes that do not need it.
+  `cuboid { width, depth, height }`, `cylinder { radius, height, segments }` and
+  `sphere { radius, segments, bands }`.
+- The parameter set is the shape's own. A box has three independent sides and always six faces; only
+  the curved shapes have a face count, and only a sphere has latitude bands. There is no generic
+  tessellation field shared by shapes that do not need it.
+- A box is anchored at its **base minimum corner**: its local zero is the corner of the base
+  rectangle, so it occupies `[0..width] × [0..depth] × [0..height]` in its own frame. The anchor is
+  a panel's (see [Panels and edge banding](panels.md)) and the space a product frame reserves
+  ([0101](../decisions/0101-a-frame-and-a-box-are-one-tool.md)). A cylinder and a sphere stay centred
+  on their own zero until they are drawn by the same tool.
 - Every dimension is validated on construction and on load: at least 2 µm and at most 10 m. A curved
   shape takes 3 to 256 sides; a sphere takes 2 to 128 latitude bands. A rejected parameter set is a
   readable error, never an empty shape.
-- `object.primitive.create` takes the full extent — the cube's edge or the diameter of a cylinder or
-  sphere — and builds the default tessellation: 32 sides and 16 bands. A cylinder's height equals the
-  extent, so one number is one shape.
+- `object.primitive.create` takes the validated parameter set, so a box arrives with its three sides.
+  A cylinder or a sphere is built from its full extent — the diameter — with the default
+  tessellation of 32 sides and 16 bands; the cylinder's height equals the extent, so one number is
+  one shape.
+- A box is **drawn**, not placed by one click: the maker draws the base rectangle on the work plane
+  in 1 mm steps, fixes it, then pulls the height along the plane's normal, and one
+  `object.primitive.create` commits the gesture ([0101](../decisions/0101-a-frame-and-a-box-are-one-tool.md)).
 - The counts and the bounds are analytic (`vertex_count`, `face_count`, `bounds_micrometres`), so the
   scene tree, the `pivot_local` offset and the camera frame never evaluate a mesh. The bound of a sphere is the
   sphere, not its tessellated polygon.
 - `object.primitive.replace` stores a new validated parameter set in one revision and one undo entry,
   keeping the id, name, placement, pivot_local and properties. The card shows the fields the shape has,
-  in millimetres and whole numbers.
+  in millimetres and whole numbers: a box its width, depth and height.
+- A selected box shows ten grips — the four corners of its base and the six face centres. A corner
+  drag moves both horizontal sides, a face drag one side, both in 1 mm steps; dragging a minimum side
+  also moves the placement, so the opposite side stays where it is in the world. One drag is one undo
+  entry through the session's edit scope.
 - Collapsing a primitive bakes the derived mesh and drops the parameters, exactly as a constructive
   object drops its feature list. A baked mesh and a path cannot be collapsed.
 

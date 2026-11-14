@@ -131,6 +131,15 @@ pub enum EdgeRef {
     },
 }
 
+impl std::fmt::Display for EdgeRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rect { edge } => write!(formatter, "edge {edge}"),
+            Self::Ring { segment } => write!(formatter, "ring segment {segment}"),
+        }
+    }
+}
+
 /// The typed parameters of a machining operation.
 ///
 /// The variant is the operation kind; it is tagged in the file, so a newer file with an operation

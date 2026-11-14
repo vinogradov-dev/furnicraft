@@ -5,8 +5,8 @@
 //! where the modes meet. Each mode keeps its state and the methods that enter, feed and leave it in
 //! its own module: `selection.rs` (the selection and the open set), `visibility.rs` (the hidden
 //! and locked nodes), `mesh.rs` (sub-object editing), `contour.rs` (the contour working copy), `drawing.rs` (the drawing draft and its commit),
-//! `creation.rs` (the armed container and the `create` commands), `ribbon.rs` (the ribbon and the
-//! extrusion it offers) and `cards.rs` (the scene tree and the inspector).
+//! `creation.rs` (the armed container, the box tool and the `create` commands), `ribbon.rs` (the
+//! ribbon and the extrusion it offers) and `cards.rs` (the scene tree and the inspector).
 //!
 //! Refuses nothing at this level: a mode that cannot start returns `false` and leaves the state
 //! untouched, so the shell can ignore a gesture it cannot honour.
@@ -17,6 +17,7 @@ use std::collections::HashSet;
 
 use furnicraft_model::Id;
 
+use crate::box_tool::BoxDraft;
 use crate::camera_card::CameraCard;
 use crate::container_card::ContainerCard;
 use crate::contour_edit::ContourEdit;
@@ -63,6 +64,8 @@ pub struct Editor {
     contour_edit: Option<ContourEdit>,
     drawing: Option<DrawDraft>,
     pending_primitive: Option<PendingPrimitive>,
+    /// The base rectangle and the height of a box being drawn, before its one command.
+    box_draft: Option<BoxDraft>,
     /// The class the next click fills a niche with, when the empty-space tool is armed.
     fill: Option<FillArm>,
     /// The container the next created nodes land in, or `None` for the scene root.

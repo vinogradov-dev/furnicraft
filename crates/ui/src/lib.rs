@@ -15,6 +15,7 @@
     clippy::unreachable
 )]
 
+mod box_tool;
 mod camera_card;
 mod class_picker;
 mod command;
@@ -24,6 +25,7 @@ mod contour_edit;
 mod contour_grips;
 mod coords;
 pub mod display;
+mod distance;
 mod draw;
 mod editor;
 pub mod home;
@@ -48,9 +50,11 @@ pub mod toolbars;
 pub mod ui_scale;
 mod view_flags;
 
+pub use box_tool::{BoxBase, BoxDraft, BoxDraftError, BoxOwner, MIN_BOX_HEIGHT_MM};
 pub use command_bar::{CommandBar, CommandBarAction};
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
+pub use distance::{DistanceFields, DistanceOutcome, DistanceRefusal, Distances, FieldPlacement, Side};
 pub use draw::{DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use editor::{Editor, FillArm};
 pub use furnicraft_text::{Counted, Lang, Message};

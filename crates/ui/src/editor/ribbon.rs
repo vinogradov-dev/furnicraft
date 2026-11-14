@@ -20,6 +20,7 @@ use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
+use crate::box_tool::BoxOwner;
 use crate::command::{dispatch, json};
 use crate::toolbars::{self, ToolAction};
 
@@ -47,7 +48,8 @@ impl Editor {
         let active = toolbars::tool_activity(
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
-            self.fill_arm().map(|arm| arm.class),
+            self.box_tool(),
+            self.fill_arm().map(|arm| (arm.class, arm.mode)),
         );
         let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
         let context = toolbars::RibbonContext {
@@ -62,8 +64,10 @@ impl Editor {
             draft,
         };
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, context, &mut actions);
-        self.apply_ribbon_actions(session, actions, crate::language(ui.ctx()))
+        let list_rect = toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        let mut outcome = self.apply_ribbon_actions(session, actions, crate::language(ui.ctx()))?;
+        outcome.list_rect = list_rect;
+        Ok(outcome)
     }
 
     /// Runs the actions one drawn ribbon asked for and reports what the shell must still do.
@@ -86,14 +90,16 @@ impl Editor {
                     outcome.started_drawing = true;
                 }
                 ToolAction::CreateProductCard => outcome.open_product_card = true,
+                ToolAction::DrawProductFrame => self.arm_box(BoxOwner::Product),
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
-                ToolAction::Fill { class } => {
-                    // A second click on the armed cell drops the tool; the arm is a mode, not a
-                    // one-shot, because a maker places several posts in one piece.
-                    if self.fill_arm().is_some_and(|arm| arm.class == class) {
+                ToolAction::Fill { class, mode } => {
+                    // A second click on the same method drops the tool; the arm is a mode, not a
+                    // one-shot, because a maker places several posts in one piece. Picking the other
+                    // method of the same cell arms it with that mode instead of dropping the tool.
+                    if self.fill_arm().is_some_and(|arm| arm.class == class && arm.mode == mode) {
                         self.cancel_fill();
                     } else {
-                        self.arm_fill(session, class, lang)?;
+                        self.arm_fill(session, class, mode, lang)?;
                     }
                 }
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,

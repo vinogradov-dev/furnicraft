@@ -59,7 +59,7 @@ ribbon's *Display* group draws.
 | contour/line | 3.00..21.00 × 3.00..21.00 | 18.0 × 18.0 | 21.9 % |
 | contour/polyline | 3.00..21.00 × 3.38..20.62 | 18.0 × 17.2 | 31.5 % |
 | contour/rectangle | 3.38..20.62 × 4.50..19.50 | 17.2 × 15.0 | 35.0 % |
-| primitives/cube | 4.50..19.50 × 3.75..20.25 | 15.0 × 16.5 | 36.6 % |
+| primitives/cuboid | 4.50..19.50 × 3.75..20.25 | 15.0 × 16.5 | 36.6 % |
 | primitives/cylinder | 5.25..18.75 × 4.12..20.25 | 13.5 × 16.1 | 30.2 % |
 | primitives/sphere | 4.88..19.12 × 4.88..19.12 | 14.2 × 14.2 | 33.2 % |
 | scene/assembly | 3.00..21.00 × 4.88..19.12 | 18.0 × 14.2 | 34.1 % |
@@ -88,7 +88,7 @@ passive face. Detail did not make the difference at 16 px; tone did.
 - **D2 — no mass, only wireframe.** No file had a fill. **Fixed by U28**: one ink, tonal fills by
   alpha — a passive face at 12–18 %, the result at 45–60 % — so a theme change still needs no asset
   change. Owners: `assets/README.md`, `STYLE_GUIDE.md` §5.4/§7.3, all 18 drawn SVGs.
-- **D3 — no canonical projection or footprint.** `primitives/cube`, `scene/panel`, `scene/assembly`
+- **D3 — no canonical projection or footprint.** `primitives/cuboid`, `scene/panel`, `scene/assembly`
   and `bodies/extrude` each invented their own axonometry. **Fixed by U28**: one published basis
   (`STYLE_GUIDE.md` §9.1) and one 3..21 footprint with a 20–45 % coverage band. Owners:
   `STYLE_GUIDE.md` §9, the five volumetric SVGs, `crates/ui/src/icons.rs`.
@@ -123,7 +123,7 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
   fill 45–60 % + the heavy outline (2.2–2.6); service glyphs stay bare stroke or solid silhouette.
   Emphasis is still structural and still readable in one ink, so no per-theme asset exists.
 - One axonometry is published in `STYLE_GUIDE.md` §9.1 (`x = 0.866 (u − v)`, `y = 0.5 (u + v) − w`,
-  a face circle as a `0.577` ellipse); `cube`, `cylinder`, `panel`, `assembly` and `extrude` are
+  a face circle as a `0.577` ellipse); `cuboid`, `cylinder`, `panel`, `assembly` and `extrude` are
   drawn on it, and a plate stays a plate.
 - All 18 drawn icons are redrawn inside the fixed 3..21 footprint at 20–45 % coverage, measured as
   alpha-weighted ink.

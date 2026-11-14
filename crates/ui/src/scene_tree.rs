@@ -309,7 +309,7 @@ fn show_object(
     let kind = match object.geometry() {
         furnicraft_model::Geometry::Mesh(_) => Message::TreeBadgeMesh,
         furnicraft_model::Geometry::Primitive(primitive) => match primitive.kind() {
-            furnicraft_model::PrimitiveKind::Cube => Message::TreeBadgeCube,
+            furnicraft_model::PrimitiveKind::Cuboid => Message::TreeBadgeBox,
             furnicraft_model::PrimitiveKind::Cylinder => Message::TreeBadgeCylinder,
             furnicraft_model::PrimitiveKind::Sphere => Message::TreeBadgeSphere,
         },

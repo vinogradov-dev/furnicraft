@@ -13,18 +13,23 @@
 //! Changes when: the fill gesture gains a class, a refusal or a second mode.
 
 use furnicraft_engine::Session;
-use furnicraft_model::{ClassCode, Fill};
+use furnicraft_model::{ClassCode, Fill, FillMode};
 use furnicraft_text::{Lang, Message};
 
 use super::Editor;
 
-/// The class the next click fills a niche with, and the axis pair its trait names.
+/// The class the next click fills a niche with, the axis pair its trait names and its mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FillArm {
     /// The class a created part carries and takes its label from.
     pub class: ClassCode,
     /// The pair of the niche's sides the part takes; the third is the material's thickness.
     pub fill: Fill,
+    /// How the part reads the section the walls leave.
+    ///
+    /// The mode is the method the cell ran — the one the workspace pinned — so a maker switches it
+    /// from the ribbon's list and nothing else stores it (N10).
+    pub mode: FillMode,
 }
 
 impl Editor {
@@ -33,12 +38,13 @@ impl Editor {
         self.fill
     }
 
-    /// Arms the empty-space tool with `class`, or refuses with the sentence that says why not.
+    /// Arms the empty-space tool with `class` and `mode`, or refuses with the sentence that says why.
     ///
     /// A niche belongs to the open product, and a class that does not carry the `fill` trait has no
     /// size pair to take. Arming leaves every other pointer mode: the next click creates a part
-    /// rather than starting a chain or placing a primitive.
-    pub fn arm_fill(&mut self, session: &Session, class: ClassCode, lang: Lang) -> Result<(), String> {
+    /// rather than starting a chain or placing a primitive. The mode travels with the arm, so
+    /// switching method re-arms the tool where picking the same method again drops it.
+    pub fn arm_fill(&mut self, session: &Session, class: ClassCode, mode: FillMode, lang: Lang) -> Result<(), String> {
         if session.active_product().is_none() {
             return Err(Message::FillNeedsProduct.text(lang).to_owned());
         }
@@ -50,7 +56,8 @@ impl Editor {
         self.contour_edit = None;
         self.drawing = None;
         self.pending_primitive = None;
-        self.fill = Some(FillArm { class, fill });
+        self.box_draft = None;
+        self.fill = Some(FillArm { class, fill, mode });
         Ok(())
     }
 

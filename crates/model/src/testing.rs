@@ -1,14 +1,14 @@
 //! Test support: the fixtures every crate builds its tests from.
 //!
 //! Compiled for this crate's own tests and, through the `testing` feature, for `furnicraft-testkit`,
-//! which re-exports [`millimetres`], [`open_path`] and [`sample_project`]. It is the one place those
-//! three are defined (C7): a crate's tests may not reach back into `furnicraft-testkit`, because a
+//! which re-exports [`millimetres`], [`open_path`], [`cube_mesh`] and [`sample_project`]. It is the
+//! one place those four are defined (C7): a crate's tests may not reach back into `furnicraft-testkit`, because a
 //! dev-dependency on a crate that already depends on this one would compile this crate a second time
 //! and every model type would come in two incompatible versions.
 //!
 //! Nothing here is product code; the feature is off in a release build.
 
-use crate::{ClassCode, Container, Envelope, Id, Panel, PanelNominalSize, Path, Placement, Project};
+use crate::{ClassCode, Container, Envelope, Id, Mesh, Panel, PanelNominalSize, Path, Placement, Project};
 use furnicraft_units::Length;
 
 /// Whole millimetres as an exact length; the unit every fixture is written in.
@@ -21,6 +21,18 @@ pub fn millimetres(value: i64) -> Length {
 #[allow(clippy::expect_used)]
 pub fn open_path(points: Vec<[Length; 2]>) -> Path {
     Path::polyline(points, false).expect("an open path")
+}
+
+/// A closed box of `edge` centred on the local origin.
+///
+/// Picking, gizmo and cache tests need a solid around the origin rather than the document's own
+/// base-corner box, so the fixture names the centring it wants instead of borrowing the primitive's
+/// anchor.
+#[allow(clippy::expect_used)]
+pub fn cube_mesh(edge: Length) -> Mesh {
+    let half = Length::from_micrometres(edge.micrometres() / 2);
+    let low = Length::from_micrometres(-half.micrometres());
+    Mesh::cuboid([low; 3], [half; 3]).expect("a cube has a positive edge")
 }
 
 /// A small valid project: a root, one panel and one component container with a panel.

@@ -5,7 +5,7 @@
 use crate::parse::{
     STATE_PREFIX, backlog_entries, parse_backlog, parse_map, parse_session, parse_state, parse_task_line, session_field,
 };
-use crate::{Summary, Task, TaskStatus};
+use crate::{NO_TASK, NOTHING_SCHEDULED, Summary, Task, TaskStatus};
 
 /// Longest accepted `plan/STATUS.md`, in lines.
 pub const MAX_STATUS_LINES: usize = 70;
@@ -25,40 +25,58 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     let mut violations = parse_violations(status, backlog, &tasks);
     violations.extend(budget_violations(status, session));
     violations.extend(unparsed_task_lines(backlog));
+    violations.extend(legend_violations(backlog, &tasks));
 
     if let Some(violation) = updated_format_violation(&state.updated) {
         violations.push(violation);
     }
-    if let Some(violation) = next_violation(status, &state.task) {
+    if let Some(violation) = next_violation(status, state.current()) {
         violations.push(violation);
     }
 
-    let current = tasks.iter().find(|task| task.id == state.task);
-    match current {
-        Some(task) if task.status == TaskStatus::Done => {
-            violations.push(format!("backlog task {} is done, but `STATE: task={}` names it", state.task, state.task));
-        }
-        Some(task) => {
-            if task.section != NOW_SECTION {
+    // An empty work order is a legal state of the plan: `task=-` says so, and it is allowed only
+    // while `## Now` holds nothing unfinished. The moment a task is in the order, the line names it.
+    match state.current() {
+        None => {
+            if let Some(first) = first_unfinished(&tasks) {
                 violations.push(format!(
-                    "`STATE: task={}` sits in `## {}`; the current task must be in `## {NOW_SECTION}`",
-                    state.task, task.section
-                ));
-            } else if let Some(first) = first_unfinished(&tasks)
-                && first.id != task.id
-            {
-                violations.push(format!(
-                    "`STATE: task={}` is not the first unfinished task in `## {NOW_SECTION}`; `{}` comes before it",
-                    state.task, first.id
+                    "`STATE: task={NO_TASK}` but `## {NOW_SECTION}` still holds {}; name it or defer it",
+                    first.id
                 ));
             }
         }
-        None => violations.push(format!("`STATE: task={}` is not a task in `plan/BACKLOG.md`", state.task)),
+        Some(id) => match tasks.iter().find(|task| task.id == id) {
+            Some(task) if task.status == TaskStatus::Done => {
+                violations.push(format!("backlog task {id} is done, but `STATE: task={id}` names it"));
+            }
+            Some(task) => {
+                if task.section != NOW_SECTION {
+                    violations.push(format!(
+                        "`STATE: task={id}` sits in `## {}`; the current task must be in `## {NOW_SECTION}`",
+                        task.section
+                    ));
+                } else if let Some(first) = first_unfinished(&tasks)
+                    && first.id != task.id
+                {
+                    violations.push(format!(
+                        "`STATE: task={id}` is not the first unfinished task in `## {NOW_SECTION}`; `{}` comes before it",
+                        first.id
+                    ));
+                }
+            }
+            None => violations.push(format!("`STATE: task={id}` is not a task in `plan/BACKLOG.md`")),
+        },
     }
 
     let doing: Vec<&Task> = tasks.iter().filter(|task| task.status == TaskStatus::Doing).collect();
     match state.status.as_str() {
         "doing" => {
+            if state.current().is_none() {
+                violations.push(format!(
+                    "`STATE: state=doing` needs a task; `task={NO_TASK}` is the empty order, which has nothing \
+                     to work on"
+                ));
+            }
             if doing.len() != 1 {
                 violations.push(format!(
                     "`STATE: state=doing` needs exactly one `[~]` task, the backlog has {}",
@@ -119,7 +137,7 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
 /// prose a fresh session reads, and a paragraph about another task sends it to the wrong place.
 ///
 /// The check is silent when the section is absent, because a minimal plan may not have one.
-pub(crate) fn next_violation(status: &str, task: &str) -> Option<String> {
+pub(crate) fn next_violation(status: &str, task: Option<&str>) -> Option<String> {
     let mut in_next = false;
     let mut paragraph = String::new();
     for line in status.lines() {
@@ -136,6 +154,16 @@ pub(crate) fn next_violation(status: &str, task: &str) -> Option<String> {
             paragraph.push_str(trimmed);
         }
     }
+    let Some(task) = task else {
+        // No task is current, so the paragraph says that instead of naming one; a paragraph about a
+        // parked task would send a fresh session to work that is not in the order.
+        if paragraph.trim().starts_with(crate::NOTHING_SCHEDULED) {
+            return None;
+        }
+        return Some(format!(
+            "`plan/STATUS.md` › `## Next` must open with `{NOTHING_SCHEDULED}` while `STATE: task={NO_TASK}`"
+        ));
+    };
     if paragraph.trim().is_empty() {
         return None;
     }
@@ -332,6 +360,39 @@ fn unparsed_task_lines(backlog: &str) -> Vec<String> {
         .collect()
 }
 
+/// The phase legend: every id prefix must be a letter the legend explains.
+///
+/// A plan without a legend is not a violation — a project may not name its phases — but once the
+/// paragraph exists it is the vocabulary: a task whose id starts with a letter it does not declare,
+/// a clause the writer would not produce, or a letter declared twice means the paragraph and the ids
+/// have drifted apart, and the sentence names the verb that fixes it.
+fn legend_violations(backlog: &str, tasks: &[Task]) -> Vec<String> {
+    let Some(legend) = crate::edit::legend(backlog) else {
+        return Vec::new();
+    };
+    if let Some(problem) = legend.problems.first() {
+        // One sentence, not one per line: the paragraph is rewritten whole by the verb that owns it.
+        return vec![format!("`plan/BACKLOG.md` {problem}; `cargo xtask task phase` rewrites it")];
+    }
+    let mut violations = Vec::new();
+    let mut reported: Vec<char> = Vec::new();
+    for task in tasks {
+        let Some(letter) = task.id.chars().next().filter(|letter| letter.is_ascii_uppercase()) else {
+            continue;
+        };
+        if legend.name(letter).is_some() || reported.contains(&letter) {
+            continue;
+        }
+        reported.push(letter);
+        violations.push(format!(
+            "backlog id {} starts with phase {letter}, which the legend in `plan/BACKLOG.md` does not declare; \
+             `cargo xtask task phase {letter} --name \"…\"`",
+            task.id
+        ));
+    }
+    violations
+}
+
 /// The `base=` violation for the facts gathered from git.
 ///
 /// `HEAD` is a legal `base`: the plan edit is committed on top of it while it is still uncommitted.
@@ -508,6 +569,59 @@ mod tests {
         assert_eq!(summary.tasks[0].section, "Now");
         assert_eq!(summary.tasks[0].files.as_deref(), Some("crates/ui/src/object_card.rs"));
         assert_eq!(summary.tasks[2].status, TaskStatus::Done);
+    }
+
+    /// A backlog whose intro declares its phases, one clause per letter, and holds one task of each.
+    fn legend_backlog(clauses: &str, tasks: &str) -> String {
+        format!(
+            "# Backlog\n\nIntro.\n\n\
+             Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\
+             {clauses}\n\n\
+             ## Now\n\n{tasks}\n\
+             ## Done\n\n- `[x]` **A2** ring of segments — `0833b4c`\n"
+        )
+    }
+
+    #[test]
+    fn a_legend_that_declares_every_used_letter_is_consistent() {
+        let backlog =
+            legend_backlog("`A` — contour\n`K` — the order package", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let summary = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect("the plan is consistent");
+        assert_eq!(summary.tasks[0].id, "K4");
+    }
+
+    #[test]
+    fn an_id_in_a_phase_the_legend_does_not_declare_is_reported() {
+        let backlog = legend_backlog("`A` — contour", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let error = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect_err("K is undeclared");
+        assert!(
+            error
+                .iter()
+                .any(|violation| violation.contains("phase K") && violation.contains("`cargo xtask task phase K")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_prose_legend_is_reported_with_the_verb_that_rewrites_it() {
+        let backlog =
+            legend_backlog("Phases: A contour, K the order package", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let error = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None)
+            .expect_err("a prose clause line is not the canonical form");
+        assert!(
+            error.iter().any(|violation| violation.contains("is not a `L` — text clause")
+                && violation.contains("cargo xtask task phase")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_plan_without_a_legend_names_no_phases_and_is_not_a_violation() {
+        // A project that does not declare phases keeps working: only an existing legend is the vocabulary.
+        let backlog = legend_backlog("", "- `[ ]` **K4** the package `files: src/a.rs`")
+            .replace("Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\n", "");
+        assert!(!backlog.contains("Phases come from"), "{backlog}");
+        analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect("no legend, no phase rule");
     }
 
     #[test]
@@ -805,17 +919,17 @@ mod tests {
     fn the_next_paragraph_must_name_the_current_task() {
         let status = "STATE: milestone=M7 phase=A task=A3 state=idle base=32c659f updated=2026-10-30\n\
                       ## Next\n\nA3 is next: the card.\n";
-        assert!(next_violation(status, "A3").is_none());
+        assert!(next_violation(status, Some("A3")).is_none());
 
         let wrong = status.replace("A3 is next", "A4 is next");
-        let violation = next_violation(&wrong, "A3").expect("another task is named");
+        let violation = next_violation(&wrong, Some("A3")).expect("another task is named");
         assert!(violation.contains("names A4"), "{violation}");
 
         let silent = "STATE: milestone=M7 task=A3 state=idle base=32c659f updated=2026-10-30\n";
-        assert!(next_violation(silent, "A3").is_none(), "a plan without `## Next` is not a violation");
+        assert!(next_violation(silent, Some("A3")).is_none(), "a plan without `## Next` is not a violation");
 
         let unnamed = status.replace("A3 is next: the card.", "the card comes next.");
-        assert!(next_violation(&unnamed, "A3").is_some_and(|violation| violation.contains("must name")));
+        assert!(next_violation(&unnamed, Some("A3")).is_some_and(|violation| violation.contains("must name")));
     }
 
     #[test]

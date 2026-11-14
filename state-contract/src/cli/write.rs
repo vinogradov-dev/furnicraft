@@ -96,8 +96,8 @@ fn read_stdin() -> Result<String, String> {
     Ok(text)
 }
 
-/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `take`, `defer` and `drop`, plus
-/// `state set`.
+/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `take`, `defer`, `drop` and `phase`,
+/// plus `state set`.
 pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     run_with(root, args, &ProcessGit::new(root))
 }
@@ -105,7 +105,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
 /// [`run`] with the git facts supplied by `git`, so a test needs no repository.
 pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let Some(verb) = args.first().map(String::as_str) else {
-        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|defer|drop> …".to_owned());
+        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|defer|drop|phase> …".to_owned());
     };
     let rest = &args[1..];
     match verb {
@@ -119,18 +119,27 @@ pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), Strin
         "drop" => drop(root, rest, git),
         "take" => take(root, rest, git),
         "defer" => defer(root, rest, git),
+        "phase" => phase(root, rest, git),
         other => Err(format!("unknown verb `{other}`")),
     }
 }
 
-/// `task add --phase <P> --files <paths> [--section Now] [--at top|end] [--why/--shape/--done <text>] <lead>`
+/// `task add --phase <L> [--phase-name <text>] --files <paths> [--section Now] [--at top|end]
+/// [--why/--shape/--done <text>] <lead>`
 ///
 /// `--at top` puts the task at the head of the work order and points `STATE: task=` at it, because
 /// the tool cannot leave a plan in which the current task is not the first open one: an owner-directed
 /// interjection joins the order in one validated write instead of two that are each refused.
+///
+/// `--phase` is one capital letter, and `--phase-name` declares it in the legend in the same write,
+/// so the first task of a new phase does not need a second command. Without a name the phase must
+/// already be declared: a file whose ids use a letter its legend does not explain is the drift this
+/// gate reports.
 fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["phase", "section", "files", "why", "shape", "done", "at", "next"])?;
-    let phase = options.required("phase")?;
+    let options =
+        Options::parse(args, &["phase", "phase-name", "section", "files", "why", "shape", "done", "at", "next"])?;
+    let phase = options.required("phase")?.to_uppercase();
+    let letter = one_letter(&phase)?;
     let files = options.required("files")?;
     let lead = options.words.join(" ");
     if lead.trim().is_empty() {
@@ -148,7 +157,21 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         ));
     }
     let backlog = read(root, "plan/BACKLOG.md")?;
-    let id = edit::next_id(&backlog, phase);
+    let backlog = match options.value("phase-name") {
+        Some(name) => edit::set_phases(&backlog, &[(letter, name.to_owned())])?,
+        None => {
+            if let Some(legend) = edit::legend(&backlog)
+                && legend.problems.is_empty()
+                && legend.name(letter).is_none()
+            {
+                return Err(format!(
+                    "phase {letter} is not declared in the legend; `cargo xtask task phase {letter} --name \"…\"` or `--phase-name`"
+                ));
+            }
+            backlog
+        }
+    };
+    let id = edit::next_id(&backlog, &phase);
     let mut fields: Vec<(String, String)> = Vec::new();
     for (label, key) in [("Why", "why"), ("Shape", "shape"), ("Done", "done")] {
         if let Some(body) = options.value(key) {
@@ -175,6 +198,51 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         println!("task {id} added to `## {section}`");
     }
     Ok(())
+}
+
+/// `task phase <L> --name <text>`, or `task phase --declare "L=text" [--declare "M=text" …]`
+///
+/// The legend of `plan/BACKLOG.md` — what each id prefix means — is written here and nowhere else,
+/// so a session can declare a phase when it opens one and the paragraph cannot drift from the ids
+/// the file uses. Several letters may travel in one call because a file whose legend is still prose
+/// has to gain every letter its ids use at once: the gate refuses a plan whose ids name a phase the
+/// legend does not declare, so a one-letter-at-a-time migration could not land.
+fn phase(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
+    let options = Options::parse(args, &["name", "declare"])?;
+    let mut declares: Vec<(char, String)> = Vec::new();
+    for (key, value) in &options.values {
+        if key != "declare" {
+            continue;
+        }
+        let Some((letter, name)) = value.split_once('=') else {
+            return Err(format!("`--declare` takes `L=text`, not `{value}`"));
+        };
+        declares.push((one_letter(&letter.trim().to_uppercase())?, name.trim().to_owned()));
+    }
+    if let Some(word) = options.words.first() {
+        let letter = one_letter(&word.to_uppercase())?;
+        declares.push((letter, options.required("name")?.to_owned()));
+    }
+    let backlog = read(root, "plan/BACKLOG.md")?;
+    let backlog = edit::set_phases(&backlog, &declares)?;
+    let changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
+    apply(root, changes, &options, git)?;
+    if !options.dry_run {
+        println!("the phase legend changed");
+    }
+    Ok(())
+}
+
+/// The one capital letter a phase is, or the sentence that says what a phase is.
+fn one_letter(text: &str) -> Result<char, String> {
+    let mut chars = text.chars();
+    let Some(letter) = chars.next() else {
+        return Err("a phase is one capital letter, like `K`".to_owned());
+    };
+    if chars.next().is_some() || !letter.is_ascii_uppercase() {
+        return Err(format!("`{text}` is not a phase: a phase is one capital letter, like `K`"));
+    }
+    Ok(letter)
 }
 
 /// `task start <ID> [--goal <text>] [--now <text>] [--run <cmd>]`
@@ -312,12 +380,12 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let backlog = edit::move_entry(&backlog, &id, "Done", edit::At::Top)?;
     let status = read(root, "plan/STATUS.md")?;
     let tasks = crate::parse_backlog(&backlog);
-    let next = first_open(&tasks).ok_or_else(|| {
-        "no unfinished task is left in `## Now`; set `STATE:` for the next milestone by hand".to_owned()
-    })?;
+    // The order may end here: `task=-` says no task is scheduled, and `## Next` says so in words.
+    let next = first_open(&tasks);
+    let current = next.map_or_else(|| crate::NO_TASK.to_owned(), |task| task.id.clone());
     // The plan describes the tree that is checked out now, so `base` and `updated` follow `HEAD`,
     // not the commit the closed task names (a task may be closed long after it landed).
-    let mut values = vec![("task".to_owned(), next.id.clone()), ("state".to_owned(), "idle".to_owned())];
+    let mut values = vec![("task".to_owned(), current), ("state".to_owned(), "idle".to_owned())];
     if let Some(head) = git.short("HEAD") {
         values.push(("base".to_owned(), head));
     }
@@ -326,9 +394,11 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     }
     let status = edit::set_state(&status, &values)?;
     // The `## Next` paragraph names the task `STATE:` does, so a close that changes it must say what
-    // the next paragraph is; otherwise the gate refuses and nothing is written.
+    // the next paragraph is; otherwise the gate refuses and nothing is written. An order that ends
+    // here has no task to name, so the close writes the sentence that says nothing is scheduled.
     let status = match options.value("next") {
-        Some(next) => edit::set_section(&status, "Next", next)?,
+        Some(paragraph) => edit::set_section(&status, "Next", paragraph)?,
+        None if next.is_none() => edit::set_section(&status, "Next", &nothing_scheduled(&tasks))?,
         None => status,
     };
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog).with("plan/STATUS.md", status);
@@ -337,7 +407,10 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     }
     apply(root, changes, &options, git)?;
     if !options.dry_run {
-        println!("task {id} closed into `## Done` at `{hash}`; `{next_id}` is next", next_id = next.id);
+        match next {
+            Some(task) => println!("task {id} closed into `## Done` at `{hash}`; `{}` is next", task.id),
+            None => println!("task {id} closed into `## Done` at `{hash}`; the work order is empty"),
+        }
     }
     Ok(())
 }
@@ -430,17 +503,19 @@ fn defer(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let moved = crate::parse_backlog(&backlog);
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
     if first_open(&tasks).is_some_and(|head| head.id == id) {
-        let next = first_open(&moved).ok_or_else(|| {
-            format!(
-                "deferring {id} would leave `## Now` with nothing to work on; close the milestone or add a \
-                 task first"
-            )
-        })?;
+        // Deferring the head hands the order to the next open entry, or leaves it empty; either way
+        // `STATE:` and `## Next` say the same thing in the same write.
+        let next = first_open(&moved);
+        let current = next.map_or_else(|| crate::NO_TASK.to_owned(), |task| task.id.clone());
         let status = read(root, "plan/STATUS.md")?;
-        let status = edit::set_state(&status, &[("task".to_owned(), next.id.clone())])?;
+        let status = edit::set_state(&status, &[("task".to_owned(), current)])?;
         let status = match options.value("next") {
-            Some(next) => edit::set_section(&status, "Next", next)?,
-            None => edit::set_section(&status, "Next", &format!("{} is next: {}", next.id, next.lead))?,
+            Some(paragraph) => edit::set_section(&status, "Next", paragraph)?,
+            None => {
+                let paragraph = next
+                    .map_or_else(|| nothing_scheduled(&moved), |task| format!("{} is next: {}", task.id, task.lead));
+                edit::set_section(&status, "Next", &paragraph)?
+            }
         };
         changes = changes.with("plan/STATUS.md", status);
     }
@@ -470,7 +545,7 @@ fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     // otherwise the gate refuses, and two hand edits are the only way to say what the plan means.
     let status = match options.value("next") {
         Some(next) => edit::set_section(&status, "Next", next)?,
-        None if crate::validate::next_violation(&status, &id).is_some() => {
+        None if crate::validate::next_violation(&status, Some(&id)).is_some() => {
             return Err(format!(
                 "`plan/STATUS.md` › `## Next` must name the reopened task {id}; \
                  `task reopen {id} --next \"{id} is next: …\"` rewrites it in the same write"
@@ -514,6 +589,19 @@ fn find<'a>(tasks: &'a [crate::Task], id: &str) -> Result<&'a crate::Task, Strin
 }
 
 /// The first unfinished task in `## Now`, which is the task `STATE:` must name.
+/// The paragraph an empty work order writes: nothing is scheduled, and the parked work is counted.
+///
+/// A fresh session reads `## Next` first, so the empty order has to read as a state and not as a
+/// missing sentence; the count tells it that the backlog is not empty, only the order.
+fn nothing_scheduled(tasks: &[crate::Task]) -> String {
+    let parked = tasks.iter().filter(|task| task.status != TaskStatus::Done && task.section != "Now").count();
+    match parked {
+        0 => format!("{}: the backlog holds no open task.", crate::NOTHING_SCHEDULED),
+        1 => format!("{}: 1 open task waits in `## Next`.", crate::NOTHING_SCHEDULED),
+        count => format!("{}: {count} open tasks wait in `## Next`.", crate::NOTHING_SCHEDULED),
+    }
+}
+
 fn first_open(tasks: &[crate::Task]) -> Option<&crate::Task> {
     tasks.iter().find(|task| task.section == "Now" && task.status != TaskStatus::Done)
 }
@@ -881,6 +969,99 @@ mod tests {
     const NOTE: &str = "task: P6\ngoal: the writer\n\nsteps:\n  [x] the layout\n  [ ] the writer\n\n\
 now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
 
+    /// A backlog that declares its phases the canonical way and holds one task of each.
+    const LEGEND: &str = "# Backlog\n\nIntro prose.\n\n\
+Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\
+`P` — the plan and `xtask` itself\n\
+`S` — a structural refactor that changes module boundaries only\n\n\
+## Now\n\n\
+- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n\
+- `[ ]` **S14** the banding\n  `files: src/b.rs`\n\n\
+## Bugs\n\n\
+## Next\n\n\
+## Done\n";
+
+    #[test]
+    fn a_phase_is_declared_and_then_updated_by_one_verb() {
+        let root = project("phase", STATUS, LEGEND, None);
+        run(&root, &["phase", "K", "--name", "the order package"]).expect("K is declared");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "the clause added: {backlog}");
+        assert!(backlog.contains("`P` — the plan and `xtask` itself\n"), "the others stayed: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+
+        run(&root, &["phase", "K", "--name", "the order package and its money"]).expect("K is updated");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package and its money\n"), "{backlog}");
+        assert!(!backlog.contains("`K` — the order package\n"), "the old clause is gone: {backlog}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn several_phases_travel_in_one_write() {
+        let root = project("phase-many", STATUS, LEGEND, None);
+        run(&root, &["phase", "--declare", "K=the order package", "--declare", "R=the pre-release rename"])
+            .expect("both letters are declared");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "{backlog}");
+        assert!(backlog.contains("`R` — the pre-release rename\n"), "{backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_partial_legend_that_drops_a_used_phase_is_refused() {
+        // The prose legend declares P and K; rewriting it with P alone would leave task K4 unexplained.
+        let prose = LEGEND
+            .replace(
+                "`P` — the plan and `xtask` itself\n`S` — a structural refactor that changes module boundaries only",
+                "P is the plan, K is the order package",
+            )
+            .replace("**S14** the banding", "**K4** the package");
+        let root = project("phase-drop", STATUS, &prose, None);
+        let before = std::fs::read_to_string(root.join("plan/BACKLOG.md")).expect("the backlog is readable");
+        let error = run(&root, &["phase", "P", "--name", "the plan"]).expect_err("K would lose its clause");
+        assert!(error.contains("nothing was written"), "{error}");
+        // The sentence itself belongs to the gate, so it is asserted there: this verb only refuses.
+        assert!(
+            crate::check_with(&root, &FakeGit).is_err(),
+            "the fixture's prose legend is what the gate reports, and the rewrite would have left K undeclared"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("plan/BACKLOG.md")).expect("readable"),
+            before,
+            "a refusal writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_task_in_an_undeclared_phase_is_refused_unless_it_names_one() {
+        let root = project("phase-add", STATUS, LEGEND, None);
+        let error =
+            run(&root, &["add", "--phase", "K", "--files", "src/a.rs", "the package"]).expect_err("K is not declared");
+        assert!(error.contains("task phase K"), "the sentence names the verb: {error}");
+
+        run(&root, &["add", "--phase", "K", "--phase-name", "the order package", "--files", "src/a.rs", "the package"])
+            .expect("the declaration travels with the task");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "{backlog}");
+        assert!(backlog.contains("**K1** the package"), "the task landed in its phase: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_phase_is_one_capital_letter() {
+        let root = project("phase-letter", STATUS, LEGEND, None);
+        let error = run(&root, &["phase", "KK", "--name", "two letters"]).expect_err("two letters is no phase");
+        assert!(error.contains("one capital letter"), "{error}");
+        // A lowercase letter is read as the capital it names, the same way `add --phase` reads one.
+        run(&root, &["phase", "k", "--name", "lowercase but read as K"]).expect("a lowercase letter names its phase");
+        assert!(text(&root, "plan/BACKLOG.md").contains("`K` — lowercase but read as K\n"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A scratch project: two plan files, two source files, a note only when the test needs one.
     fn project(name: &str, status: &str, backlog: &str, session: Option<&str>) -> PathBuf {
         let root = std::env::temp_dir().join(format!("xtask-write-{name}-{}", std::process::id()));
@@ -1220,14 +1401,80 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn an_order_cannot_be_emptied_by_deferring_its_last_task() {
+    /// A plan whose whole order is one open task, with a paragraph that names it.
+    fn one_task_order() -> (&'static str, &'static str) {
         let backlog = "## Now\n\n- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n## Bugs\n\n## Next\n\n## Done\n";
-        let root = project("defer-last", &with_next(STATUS), backlog, None);
-        let before = snapshot(&root);
-        let error = run(&root, &["defer", "P6"]).expect_err("the order must keep a head");
-        assert!(error.contains("nothing to work on"), "{error}");
-        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=P6 state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nP6 is next: the writer\n";
+        (status, backlog)
+    }
+
+    #[test]
+    fn deferring_the_last_task_leaves_a_valid_empty_order() {
+        let (status, backlog) = one_task_order();
+        let root = project("defer-last", status, backlog, None);
+        run(&root, &["defer", "P6"]).expect("the order may be empty");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=- state=idle"), "the state says no task is scheduled: {status}");
+        assert!(status.contains("Nothing is scheduled"), "`## Next` says the order is empty: {status}");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        let next = backlog.find("## Next").expect("Next is there");
+        assert!(backlog[next..].contains("**P6**"), "the entry is parked under `## Next`: {backlog}");
+        assert!(!backlog[..next].contains("**P6**"), "and it left the order: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn closing_the_last_task_leaves_a_valid_empty_order() {
+        let (status, backlog) = one_task_order();
+        let root = project("close-last", status, backlog, None);
+        run(&root, &["close", "P6", "--commit", "abc1234"]).expect("the order may be empty");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=- state=idle"), "{status}");
+        assert!(status.contains("Nothing is scheduled"), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taking_a_parked_task_restores_the_current_one() {
+        let (status, backlog) = one_task_order();
+        let root = project("take-into-empty", status, backlog, None);
+        run(&root, &["defer", "P6"]).expect("the order is empty");
+        run(&root, &["take", "P6"]).expect("the parked task claims the order");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=P6 state=idle"), "{status}");
+        assert!(status.contains("P6 is next"), "the paragraph names it again: {status}");
+        assert!(!status.contains("Nothing is scheduled"), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_order_cannot_still_hold_a_task() {
+        // `task=-` is the empty order; the gate refuses it while `## Now` has an unfinished task.
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=- state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nNothing is scheduled: 1 open task waits in `## Next`\n";
+        let root = project("empty-with-task", status, BACKLOG, None);
+        let error = crate::check_with(&root, &FakeGit).expect_err("P6 is still in the order");
+        assert!(
+            error.iter().any(|violation| violation.contains("task=-") && violation.contains("still holds P6")),
+            "{error:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_order_needs_the_sentence_that_says_so() {
+        let (_, backlog) = one_task_order();
+        let parked =
+            backlog.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`", "").replace("## Now\n\n", "## Now\n");
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=- state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nP6 waits for the owner.\n";
+        let root = project("empty-paragraph", status, &parked, None);
+        let error = crate::check_with(&root, &FakeGit).expect_err("the paragraph names a parked task");
+        assert!(error.iter().any(|violation| violation.contains("Nothing is scheduled")), "{error:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

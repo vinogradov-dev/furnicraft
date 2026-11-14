@@ -1,9 +1,9 @@
 //! The selected geometry object card.
 //!
 //! An object is a leaf with one geometry payload. A mesh object is edited directly and has no
-//! feature history. A primitive object shows its parameters — an edge, a radius, a height, the
-//! number of sides and bands — because they are the source of truth and the mesh is derived
-//! ([ADR 0054]). A constructive object shows its contour instead: the contour and the feature
+//! feature history. A primitive object shows its parameters — three sides of a box, a radius, a
+//! height, the number of sides and bands — because they are the source of truth and the mesh is
+//! derived ([ADR 0054]). A constructive object shows its contour instead: the contour and the feature
 //! height are the source of truth, and `object.collapse` bakes it into an editable mesh
 //! ([ADR 0037]). A path object shows its flat drawing: it has no mesh and no feature height until
 //! it becomes a contour or is extruded.
@@ -109,9 +109,10 @@ struct PrimitiveDraft {
 /// the document keeps [`Length`], and the card converts at the command edge.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct PrimitiveFields {
-    edge: f64,
-    radius: f64,
+    width: f64,
+    depth: f64,
     height: f64,
+    radius: f64,
     segments: u32,
     bands: u32,
 }
@@ -120,7 +121,11 @@ impl PrimitiveFields {
     fn read(primitive: &Primitive) -> Self {
         let mut fields = Self::default();
         match primitive {
-            Primitive::Cube(cube) => fields.edge = cube.edge().millimetres_f64(),
+            Primitive::Cuboid(cuboid) => {
+                fields.width = cuboid.width().millimetres_f64();
+                fields.depth = cuboid.depth().millimetres_f64();
+                fields.height = cuboid.height().millimetres_f64();
+            }
             Primitive::Cylinder(cylinder) => {
                 fields.radius = cylinder.radius().millimetres_f64();
                 fields.height = cylinder.height().millimetres_f64();
@@ -144,14 +149,19 @@ impl PrimitiveDraft {
     /// The primitive the fields describe, or a readable reason they do not.
     ///
     /// The shape comes from `base`, so a field that belongs to another shape is never invented: a
-    /// cube has only an edge and a sphere has no height.
+    /// box has only its three sides and a sphere has no height.
     fn parse(&self, lang: Lang) -> Result<Primitive, String> {
         let length = |value: f64| {
             scrub::millimetres(value)
                 .ok_or_else(|| Message::PrimitiveRefused.with(lang, [Message::LengthErrorOutOfRange.text(lang)]))
         };
         let primitive = match &self.base {
-            Primitive::Cube(_) => Primitive::cube(length(self.fields.edge)?),
+            Primitive::Cuboid(_) => {
+                let width = length(self.fields.width)?;
+                let depth = length(self.fields.depth)?;
+                let height = length(self.fields.height)?;
+                Primitive::cuboid(width, depth, height)
+            }
             Primitive::Cylinder(_) => {
                 Primitive::cylinder(length(self.fields.radius)?, length(self.fields.height)?, self.fields.segments)
             }
@@ -391,7 +401,7 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
 /// The interface's name for a primitive shape.
 fn primitive_kind_label(kind: furnicraft_model::PrimitiveKind) -> Message {
     match kind {
-        furnicraft_model::PrimitiveKind::Cube => Message::ToolCube,
+        furnicraft_model::PrimitiveKind::Cuboid => Message::ToolBox,
         furnicraft_model::PrimitiveKind::Cylinder => Message::ToolCylinder,
         furnicraft_model::PrimitiveKind::Sphere => Message::ToolSphere,
     }
@@ -692,8 +702,8 @@ impl ObjectCard {
 
     /// Draws the primitive parameters; returns the parsed primitive when a field handed its number over.
     ///
-    /// Only the fields the shape has are shown: a cube has one edge, a cylinder a radius, a height
-    /// and its sides, a sphere a radius, its sides and its bands.
+    /// Only the fields the shape has are shown: a box its width, depth and height, a cylinder a
+    /// radius, a height and its sides, a sphere a radius, its sides and its bands.
     fn primitive_section(
         &mut self,
         ui: &mut Ui,
@@ -710,8 +720,10 @@ impl ObjectCard {
         };
         ui.separator();
         section(ui, "object.primitive", Message::SectionParameters.text(lang), true, |ui| match primitive {
-            Primitive::Cube(_) => {
-                report.absorb(length_row(ui, Message::FieldEdge.text(lang), &mut draft.fields.edge, fresh));
+            Primitive::Cuboid(_) => {
+                report.absorb(length_row(ui, Message::FieldWidth.text(lang), &mut draft.fields.width, fresh));
+                report.absorb(length_row(ui, Message::FieldDepth.text(lang), &mut draft.fields.depth, fresh));
+                report.absorb(length_row(ui, Message::FieldHeight.text(lang), &mut draft.fields.height, fresh));
             }
             Primitive::Cylinder(_) => {
                 report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
@@ -1146,8 +1158,8 @@ mod tests {
 
     use furnicraft_engine::ObjectExtrudeCreate;
     use furnicraft_engine::object_cmds::OBJECT_EXTRUDE_CREATE_ID;
-    use furnicraft_model::{Mesh, Placement};
-    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
+    use furnicraft_model::Placement;
+    use furnicraft_testkit::{cube_mesh, millimetres, sample_catalog, sample_project};
     use furnicraft_units::{Degrees, Length};
 
     use super::*;
@@ -1172,7 +1184,7 @@ mod tests {
     fn object_project() -> (furnicraft_model::Project, Id) {
         let mut project = sample_project();
         let root = project.root().id();
-        let mesh = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
+        let mesh = cube_mesh(Length::from_millimetres(100).expect("length"));
         let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("add object");
         (project, id)
     }
@@ -1250,7 +1262,12 @@ mod tests {
     #[test]
     fn the_primitive_fields_read_and_parse_the_stored_parameters() {
         let cases = [
-            Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube"),
+            Primitive::cuboid(
+                Length::from_millimetres(600).expect("width"),
+                Length::from_millimetres(400).expect("depth"),
+                Length::from_millimetres(720).expect("height"),
+            )
+            .expect("box"),
             Primitive::cylinder(
                 Length::from_millimetres(25).expect("radius"),
                 Length::from_millimetres(80).expect("height"),
@@ -1268,12 +1285,18 @@ mod tests {
 
     #[test]
     fn the_primitive_fields_refuse_a_value_the_document_cannot_hold() {
-        let cube = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
-        let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &cube);
-        draft.fields.edge = 0.0;
-        assert!(draft.parse(Lang::En).is_err(), "a zero edge is not a solid");
-        draft.fields.edge = 20_000.0;
-        assert!(draft.parse(Lang::En).is_err(), "a twenty-metre edge is past the document's cap");
+        let box_ = Primitive::cuboid(
+            Length::from_millimetres(100).expect("width"),
+            Length::from_millimetres(100).expect("depth"),
+            Length::from_millimetres(100).expect("height"),
+        )
+        .expect("box");
+        let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &box_);
+        draft.fields.width = 0.0;
+        assert!(draft.parse(Lang::En).is_err(), "a zero side is not a solid");
+        draft.fields.width = 100.0;
+        draft.fields.depth = 20_000.0;
+        assert!(draft.parse(Lang::En).is_err(), "a twenty-metre side is past the document's cap");
 
         let sphere = Primitive::sphere(Length::from_millimetres(40).expect("radius"), 24, 12).expect("sphere");
         let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &sphere);
@@ -1286,10 +1309,20 @@ mod tests {
 
     #[test]
     fn applying_new_parameters_is_one_command_and_keeps_the_id() {
-        let original = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
+        let original = Primitive::cuboid(
+            Length::from_millimetres(600).expect("width"),
+            Length::from_millimetres(400).expect("depth"),
+            Length::from_millimetres(720).expect("height"),
+        )
+        .expect("box");
         let (mut session, id) = primitive_session(original.clone());
         let before = session.project().revision();
-        let wider = Primitive::cube(Length::from_millimetres(160).expect("edge")).expect("cube");
+        let wider = Primitive::cuboid(
+            Length::from_millimetres(700).expect("width"),
+            Length::from_millimetres(400).expect("depth"),
+            Length::from_millimetres(720).expect("height"),
+        )
+        .expect("box");
         replace_primitive(&mut session, id, wider.clone(), None).expect("replace the parameters");
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per commit");
         assert_eq!(session.project().object_primitive(id), Ok(&wider));
@@ -1301,18 +1334,23 @@ mod tests {
 
     #[test]
     fn a_dragged_primitive_field_is_one_undo_entry() {
-        let original = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
+        let box_ = |width: f64| {
+            Primitive::cuboid(
+                scrub::millimetres(width).expect("a length"),
+                Length::from_millimetres(400).expect("depth"),
+                Length::from_millimetres(720).expect("height"),
+            )
+            .expect("box")
+        };
+        let original = box_(600.0);
         let (mut session, id) = primitive_session(original.clone());
         let scope = session.edit_scope();
-        for edge in [120.0, 140.0, 160.0] {
-            let cube = Primitive::cube(scrub::millimetres(edge).expect("a length")).expect("cube");
-            replace_primitive(&mut session, id, cube, Some(scope)).expect("the field writes while the hand moves");
+        for width in [620.0, 640.0, 660.0] {
+            replace_primitive(&mut session, id, box_(width), Some(scope))
+                .expect("the field writes while the hand moves");
         }
         session.end_edit();
-        assert_eq!(
-            session.project().object_primitive(id),
-            Ok(&Primitive::cube(Length::from_millimetres(160).expect("edge")).expect("cube"))
-        );
+        assert_eq!(session.project().object_primitive(id), Ok(&box_(660.0)));
         session.undo().expect("undo the drag");
         assert_eq!(session.project().object_primitive(id), Ok(&original), "one undo returns the whole drag");
     }
@@ -1372,7 +1410,7 @@ mod tests {
         assert_eq!(positions.len(), 2, "vertex 8 is outside a cube");
         assert_eq!(positions[0].0, 0);
         assert_eq!(positions[1].0, 3);
-        let cube = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
+        let cube = cube_mesh(Length::from_millimetres(100).expect("length"));
         assert_eq!(positions[0].1, cube.positions()[0]);
         assert_eq!(positions[1].1, cube.positions()[3]);
         assert!(format_position(positions[0].1).ends_with(" mm"));

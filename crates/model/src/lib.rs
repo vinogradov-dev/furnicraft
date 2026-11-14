@@ -68,17 +68,18 @@ pub use panel::{
     EdgeBanding, EdgeRef, EntryFace, FaceSide, MACHINING_DESCRIPTORS, Machining, MachiningAnchor,
     MachiningCapabilities, MachiningCategory, MachiningDescriptor, MachiningKind, MachiningParams, MachiningStage,
     Panel, PanelContourError, PanelDimensionError, PanelError, PanelGeometry, PanelGeometryError, PanelNominalSize,
-    PanelOutline, PanelRect, PanelRectError, RectCorner, RectEdge, RingBanding, SegmentSource,
+    PanelOutline, PanelRect, PanelRectError, RING_TOLERANCE_MM, RectCorner, RectEdge, RingBanding, SegmentSource,
+    classify_outline,
 };
-pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
+pub use panel_features::{BevelError, CornerFeature, CornerFeatureKind, EdgeBevel, EdgeBow, MAX_BEVEL_ANGLE};
 pub use placement::{EulerAngles, PivotLocal, Placement, PlacementError};
 pub use primitive::{
-    Cube, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
+    Cuboid, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
     MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
 };
 pub use project::{
-    MoveAxis, MoveLimit, MoveRule, Niche, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit, Project, ProjectError,
-    SurfaceKind,
+    FillMode, FillPlan, FillRefusal, MoveAxis, MoveLimit, MoveRule, Niche, NichePlane, NicheRefusal, NicheShape, Probe,
+    ProbeFace, ProbeHit, Project, ProjectError, SurfaceKind, free_axis,
 };
 pub use properties::{
     Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT, SYSTEM_PROTOTYPE_ID,

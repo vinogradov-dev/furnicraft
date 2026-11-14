@@ -86,3 +86,17 @@ polygon starts at the default six sides and the card changes them afterwards; a 
 the default 200 mm and its card changes the parameter; an extrusion uses the default height, and the
 pull's ✓ makes the height it wrote the next default. The ribbon is one row of glyphs again, and
 `ready` cannot offer a tool whose number is refused.
+
+## Amendment: a split cell is a cell plus its caret (2026-11-14)
+
+U74 cut the caret out of the cell: a tool with more than one input method drew a 24 pt main face and
+a 10 pt caret inside the same 34 pt cell. A 22 pt glyph in a 24 pt face leaves 1 pt of air on each
+side, so every split cell read as a shrunken, crowded button beside the plain cells of its row (X36),
+and the glyph was centred in the whole cell to hide it.
+
+A split cell is now one full `RIBBON_CELL_WIDTH` (34) main face with the `RIBBON_CARET_WIDTH` (10)
+caret added to its right, so the two faces touch at 44 points and the glyph keeps the six points of
+air every other cell gives it. The caret is a column beside a cell, not a share of it: the drawn row
+is wider than its cell count by one caret per tool that has a list, and the glyph is centred in the
+main face, which is the cell. No other metric moves — the row is still 30 pt, the caption band is
+still 16, and a group still widens to its caption when the caption is wider.

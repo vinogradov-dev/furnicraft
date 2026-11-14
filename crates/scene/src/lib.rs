@@ -164,8 +164,9 @@ impl Default for Grid {
 /// The viewport's own colours: what the active theme variant paints the frame with.
 ///
 /// These are the frame's non-material colours — the clear colour, the floor grid, the ink of an
-/// unlit line that leaves its colour to the frame (see [`Polyline::in_ink`]) and the two inks of a
-/// product envelope (see [`ProductEnvelopeState`]). A variant never touches a drawable's material
+/// unlit line that leaves its colour to the frame (see [`Polyline::in_ink`]), the two inks of a
+/// product envelope (see [`ProductEnvelopeState`]) and the ink of a guide (see
+/// [`SceneColors::helper`]). A variant never touches a drawable's material
 /// colour, so the furniture keeps its own colours in both themes. The renderer derives the edge ink
 /// from [`SceneColors::background`], so a light workspace draws dark form edges without a second
 /// switch.
@@ -181,6 +182,15 @@ pub struct SceneColors {
     pub product_envelope_active: [f32; 4],
     /// The ink of a closed, empty product's envelope, in gamma space.
     pub product_envelope_inactive: [f32; 4],
+    /// The ink of a guide the frame draws for the person rather than for the form, in gamma space.
+    ///
+    /// A guide is the program's own geometry — the bracket of an open level, a work cursor — so it
+    /// is screen paint and never document data. The chrome side of the same ink is
+    /// `furnicraft_ui::theme::helper`; the two are one colour, pinned together by a test in `ui`,
+    /// because `scene` cannot reach the palette (ADR 0111, sheet U83). The values are written as
+    /// eight-bit steps divided by 255 so a reader can compare them with the palette without a
+    /// rounding rule in between.
+    pub helper: [f32; 4],
 }
 
 impl SceneColors {
@@ -191,6 +201,7 @@ impl SceneColors {
         line_ink: [0.95, 0.72, 0.20, 1.0],
         product_envelope_active: [0.88, 0.64, 0.29, 1.0],
         product_envelope_inactive: [0.50, 0.54, 0.60, 1.0],
+        helper: [226.0 / 255.0, 187.0 / 255.0, 109.0 / 255.0, 1.0],
     };
 
     /// The light variant: the same scene on paper instead of slate.
@@ -200,6 +211,7 @@ impl SceneColors {
         line_ink: [0.70, 0.44, 0.03, 1.0],
         product_envelope_active: [0.55, 0.33, 0.05, 1.0],
         product_envelope_inactive: [0.44, 0.47, 0.51, 1.0],
+        helper: [104.0 / 255.0, 68.0 / 255.0, 11.0 / 255.0, 1.0],
     };
 }
 
@@ -507,6 +519,8 @@ pub struct SceneFrame {
     pub product_envelope_active: [f32; 4],
     /// The ink of a closed, empty product's envelope, in gamma space.
     pub product_envelope_inactive: [f32; 4],
+    /// The ink of a guide the frame draws, in gamma space (see [`SceneColors::helper`]).
+    pub helper: [f32; 4],
     /// Shaded meshes in world space.
     pub drawables: Vec<Drawable>,
     /// Unlit line chains in world space.
@@ -530,6 +544,7 @@ impl Default for SceneFrame {
             line_ink: colors.line_ink,
             product_envelope_active: colors.product_envelope_active,
             product_envelope_inactive: colors.product_envelope_inactive,
+            helper: colors.helper,
             drawables: Vec::new(),
             polylines: Vec::new(),
             product_envelopes: Vec::new(),
@@ -540,9 +555,9 @@ impl Default for SceneFrame {
 impl SceneFrame {
     /// Paints the frame's non-material colours from `colors`, leaving every material colour alone.
     ///
-    /// The background, the grid inks and the line ink are display state, so this is how a theme
-    /// variant reaches a frame that is already built: no geometry is evaluated, no document
-    /// revision moves and the furniture keeps its own colours. The grid's switch, spacing, size
+    /// The background, the grid inks, the line ink and the guide ink are display state, so this is
+    /// how a theme variant reaches a frame that is already built: no geometry is evaluated, no
+    /// document revision moves and the furniture keeps its own colours. The grid's switch, spacing, size
     /// and major count stay with the viewport, so a variant change never turns a hidden grid on.
     pub fn apply_colors(&mut self, colors: SceneColors) {
         self.background = colors.background;
@@ -553,6 +568,7 @@ impl SceneFrame {
         self.line_ink = colors.line_ink;
         self.product_envelope_active = colors.product_envelope_active;
         self.product_envelope_inactive = colors.product_envelope_inactive;
+        self.helper = colors.helper;
     }
 
     /// Adds a drawable to the frame.

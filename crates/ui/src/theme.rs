@@ -99,8 +99,9 @@ pub const RIBBON_ROW_HEIGHT: f32 = 30.0;
 ///
 /// Every tool of every group takes the same cell, so a row is one pitch and a tool never sizes itself
 /// from its name (ADR 0067, revised by ADR 0091): 34 points hold the 22-point glyph with six points of
-/// air on each side. A numeric field takes two cells, because a number has to be readable while it is
-/// being typed.
+/// air on each side. A tool with more than one method keeps this cell as its main face and adds
+/// [`crate::icons::RIBBON_CARET_WIDTH`] points beside it for its list, so the glyph is never squeezed
+/// (X36).
 pub const RIBBON_CELL_WIDTH: f32 = 34.0;
 
 /// The narrowest a ribbon tab may be, so a short name does not become a stamp.
@@ -122,6 +123,25 @@ pub const RIBBON_CAPTION_HEIGHT: f32 = 16.0;
 /// The ribbon draws one under its tab row and one under its caption band, which is what makes
 /// [`super::toolbars::height`] the 29 and 76 points of the approved metrics.
 pub const RIBBON_RULE: f32 = 1.0;
+
+/// The rest width of a guide the program draws for the person, in points.
+///
+/// A guide is screen paint over the model — the square of a work cursor, the bracket of a group or a
+/// product that is open — so its widths are a rule in points and never a world size: a guide that
+/// grew with the zoom would read as geometry (ADR 0111).
+pub const HELPER_STROKE: f32 = 1.5;
+
+/// The width of a guide that crosses the whole viewport: the optional work crosshair.
+///
+/// A point, the weight of a hairline, because a line that spans the view is long enough to read at
+/// the quietest weight; a heavier crosshair covers the form it is there to help measure.
+pub const HELPER_CROSSHAIR_STROKE: f32 = 1.0;
+
+/// The width of the bracket of the level that is open, in points.
+///
+/// Half a point over [`HELPER_STROKE`]: opening a level is what decides what the next click does, so
+/// the container that owns the viewport says so at a glance instead of at a squint.
+pub const HELPER_OPEN_STROKE: f32 = 2.0;
 
 /// The height of the viewport bar at the bottom of the window, in points.
 pub const STATUS_HEIGHT: f32 = 28.0;
@@ -213,6 +233,14 @@ impl Palette {
             .map(|step| mix(accent, away, step * 5))
             .find(|candidate| contrast_ratio(*candidate, self.surface) >= ACCENT_CONTRAST)
             .unwrap_or(away)
+    }
+
+    /// The ink of a guide: a bracket, a work cursor, a crosshair the program draws.
+    ///
+    /// The guide is derived, not chosen, so one rule serves every preset and the scene can carry the
+    /// same value as a constant (ADR 0111).
+    pub fn helper(self) -> Color32 {
+        helper_ink(self.warn, self.dark)
     }
 }
 
@@ -547,6 +575,31 @@ pub fn warn(ui: &egui::Ui) -> Color32 {
     ui.visuals().warn_fg_color
 }
 
+/// The ink of a guide the active theme draws: a bracket, a work cursor, a crosshair.
+///
+/// A guide is the program's own help over the model, so it is one warm amber that never takes the
+/// accent of an action, the danger of a refusal or the cyan of a selection (ADR 0111, U83).
+pub fn helper(ui: &egui::Ui) -> Color32 {
+    helper_ink(warn(ui), ui.visuals().dark_mode)
+}
+
+/// How far [`helper`] is lifted away from the warning amber, in percent.
+///
+/// A guide is not a warning and must not be read as one: lifted a quarter of the way off the
+/// surface it has a value of its own — brighter than a warning on slate, deeper on paper — and it
+/// keeps the warm hue that says the program drew it.
+const HELPER_LIFT: u32 = 25;
+
+/// `warn` lifted [`HELPER_LIFT`] percent away from the surface, which is the guide ink.
+///
+/// The lift follows the variant rather than the preset — white on a dark palette, black on a light
+/// one, the direction [`Palette::readable`] pushes an accent — so the ink is the same in all three
+/// presets and the scene can carry it as a constant (`SceneColors::helper`). A test pins the
+/// contrast on the surface, the panel and the workspace of every variant.
+fn helper_ink(warn: Color32, dark: bool) -> Color32 {
+    mix(warn, if dark { Color32::WHITE } else { Color32::BLACK }, HELPER_LIFT)
+}
+
 /// Applies the dark FurniCraft visuals and spacing to `style`.
 pub fn apply(style: &mut egui::Style) {
     apply_with(style, DARK);
@@ -844,6 +897,74 @@ mod tests {
         }
     }
 
+    /// The guide ink a frame of `preset` in one variant draws, read through the accessor.
+    ///
+    /// The accessor reads the installed [`egui::Visuals`], so this is the path a bracket takes: a
+    /// palette-derived ink that a fallback to [`DARK`] would quietly break in the light variant.
+    fn helper_ink_of(preset: ThemePreset, dark: bool) -> Color32 {
+        let ctx = egui::Context::default();
+        let preference = if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light };
+        install_with(&ctx, preference, preset, None);
+        let mut ink = Color32::TRANSPARENT;
+        let output = ctx.run_ui(Default::default(), |ui| ink = helper(ui));
+        output.drop_without_applying_deltas();
+        ink
+    }
+
+    /// An eight-bit colour as the scene stores it, so the two sides of one ink can be compared.
+    fn ink_of(color: [f32; 4]) -> Color32 {
+        let channel = |value: f32| (value * 255.0).round().clamp(0.0, 255.0) as u8;
+        Color32::from_rgb(channel(color[0]), channel(color[1]), channel(color[2]))
+    }
+
+    #[test]
+    fn a_guide_reads_on_every_preset_and_never_as_an_action() {
+        for preset in ThemePreset::ALL {
+            for dark in [true, false] {
+                let name = format!("{preset:?} {}", if dark { "dark" } else { "light" });
+                let palette = preset.palette(dark);
+                let ink = palette.helper();
+                let colors = if dark { SceneColors::DARK } else { SceneColors::LIGHT };
+                assert_eq!(ink, helper_ink_of(preset, dark), "{name}: the accessor draws the ink the ramp derives");
+                assert_eq!(ink, ink_of(colors.helper), "{name}: the scene carries the same ink (ADR 0111)");
+                // One ink that reads on the chrome and on the workspace, at the weight of a guide.
+                for (fill, what) in [
+                    (palette.surface, "the header"),
+                    (palette.panel, "a panel"),
+                    (ink_of(colors.background), "the workspace"),
+                ] {
+                    let ratio = contrast_ratio(ink, fill);
+                    assert!(ratio >= 3.0, "{name}: the guide ink is {ratio:.2}:1 on {what}, under 3:1");
+                }
+                // A guide is not an action, a refusal or a selection.
+                for (other, what) in [
+                    (palette.accent, "the action accent"),
+                    (palette.accent_fill, "the filled accent"),
+                    (palette.danger, "the danger ink"),
+                    (ink_of(furnicraft_scene::SELECTION_LINE_COLOR), "the selection ink"),
+                ] {
+                    assert_ne!(ink, other, "{name}: a guide is never {what}");
+                }
+                assert!(ink.r() > ink.g() && ink.g() > ink.b(), "{name}: a guide is a warm amber, not a tint");
+                assert!(spread(ink) >= 90, "{name}: a guide has to read as a colour the program chose");
+            }
+        }
+    }
+
+    #[test]
+    fn a_guide_width_is_a_point_rule_and_not_a_world_size() {
+        // ADR 0111: three weights, one rule — the crosshair, the bracket at rest and the bracket of
+        // the open level — so U88 and U89 draw a guide without inventing a thickness.
+        assert_eq!(HELPER_CROSSHAIR_STROKE, 1.0, "a full-viewport crosshair is one hairline");
+        assert_eq!(HELPER_STROKE, 1.5, "a bracket at rest is a point and a half");
+        assert_eq!(HELPER_OPEN_STROKE, 2.0, "the bracket of the open level is two points");
+        const { assert!(HELPER_CROSSHAIR_STROKE < HELPER_STROKE) };
+        const { assert!(HELPER_STROKE < HELPER_OPEN_STROKE) };
+        for width in [HELPER_CROSSHAIR_STROKE, HELPER_STROKE, HELPER_OPEN_STROKE] {
+            assert_eq!(width % 0.5, 0.0, "a guide width lands on the half-point grid: {width}");
+        }
+    }
+
     /// The caption band and its neighbours, read inside one frame of `preset` in one variant.
     ///
     /// The accessors read the installed [`egui::Visuals`], so a test that names a preset has to run
@@ -1036,6 +1157,11 @@ mod tests {
         const { assert!(RIBBON_CELL_WIDTH - crate::icons::RIBBON_ICON_POINT_SIZE >= 2.0 * STEP) };
         const { assert!(RIBBON_ROW_HEIGHT > crate::icons::RIBBON_ICON_POINT_SIZE) };
         assert_eq!(RIBBON_ROW_HEIGHT, 30.0, "the tool row is one 30 pt glyph cell, and U75 left it alone");
+        // A tool with a method list keeps the whole cell and adds its caret beside it (X36), so the
+        // split control is one cell wider than a cell and the glyph keeps its six points of air.
+        let split = RIBBON_CELL_WIDTH + crate::icons::RIBBON_CARET_WIDTH;
+        assert_eq!(split, 44.0, "a split cell is one cell and the caret beside it");
+        assert_eq!(split % STEP, 0.0, "the caret column sits on the same grid as the cell");
         // The chrome rows keep one order: the header is the tallest because it carries the window
         // buttons, the tool row follows because it carries a glyph, then the tab row, the status bar
         // and the caption band.

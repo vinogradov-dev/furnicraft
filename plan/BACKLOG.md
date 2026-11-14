@@ -12,11 +12,27 @@ those files and their callers, not the workspace.
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and
 `## Next` are not part of that order.
-Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
-variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
-the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
-boundaries only, V is primitive parameters, X is a defect in behaviour that already shipped, and U
-is the UI: toolbars, drawing tools, view controls and icon resources.
+Phases come from the shape-base plan; `cargo xtask task phase` owns this list:
+`A` — contour
+`B` — contour operations
+`C` — sketch
+`D` — panel variants
+`E` — 2D primitives
+`F` — revolution and sweep
+`G` — 2D booleans
+`H` — hardware and accessories
+`K` — the contract other programs read: the scene file's compatibility and the order package
+`L` — scene lighting
+`M` — a milestone's own work, numbered by the milestone it was filed against
+`N` — the furniture product: its entity, the frame it reserves, the parts inside it and how they are
+  placed
+`P` — the plan and `xtask` itself
+`R` — the pre-release rename
+`S` — a structural refactor that changes module boundaries only
+`T` — the semantic classes: the registry table, its traits and the editors it gates
+`U` — the UI: toolbars, drawing tools, view controls and icon resources
+`V` — primitive parameters
+`X` — a defect in behaviour that already shipped
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -24,116 +40,43 @@ been reproduced. Taking it moves the line into `## Now` at its place in the work
 name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
-
-- `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
-  Why: The only solid primitive is a cube with one size for three edges, which nothing in
-   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
-   height, created the way the extrusion tool already works: draw the base, then pull the
-   height. ADR 0101 makes it the shared box the product frame will use too.
-  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
-   height, each validated by the existing primitive bounds, and the mesh builder derives the
-   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
-   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
-   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
-   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
-   drag on a max face changes one size while a min face changes it and compensates the
-   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
-   golden file in the same change; the schema is bumped with no migration (0096).
-  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
-   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
-   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
-   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
-   messages no longer mention a cube; cargo xtask ci is green.
-  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs`
-- `[ ]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
-  Why: The owner wants the frame created and edited exactly like the box, not with a separate
-   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
-   is card-only while the box has grips, and the two owners of a box disagree.
-  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
-   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
-   and a face one, the card keeping the three numbers and the type. Dragging a min face
-   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
-   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
-   reach the same command. The grips show whenever the frame is selected, including the
-   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
-   fields during the gesture land with N8.
-  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
-   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
-   exactly the ghost size with the placeholder class; the card and the gesture produce the same
-   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
-   green.
-  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs, crates/engine/src/node_cmds.rs`
-- `[ ]` **N8** the exact-distance fields: type a distance, lock it, centre it, with the keyboard
-  Why: A maker cannot place a post to the millimetre with a mouse, and the same need appears in
-   three gestures: filling a niche, drawing a box or a frame, and moving a piece. The probe
-   exists (N6, ADR 0103); without the fields it is a measurement nobody can state exactly.
-   Studied as behaviour in an established editor, the mechanism is a live distance field per
-   direction with one active field — not a dialog.
-  Shape: A session overlay draws one shared number field per direction of the work plane from
-   the new face to the first surface the probe found, with the unit outside (ADR 0092); exactly
-   one field is active and shows the focus ring from the theme. Typing takes the mouse out of
-   the gesture for that direction, Enter commits, Escape returns the mouse, Tab moves to the
-   opposite direction. A field offers the semantic value «По центру» / Centred in its menu,
-   which places the part in the middle of the void and yields a computed coordinate. A
-   committed distance shows a lock and the next is measured from the locked face. A direction
-   with no neighbour disables the field with a sentence; an impossible value is refused with a
-   message and writes nothing; the whole gesture is one undo entry. The overlay is shared by
-   the niche fill, the box gesture and the move tool, and the numbers come from the model
-   probe, never from a second computation.
-  Done: Tests over the pure parts: the active field, Tab, Enter and Escape move focus and
-   commit or abandon without a write; a lock makes the second distance relative to the locked
-   face; the centred value produces the midpoint coordinate; a missing neighbour disables the
-   field; an impossible value is refused. The overlay is checked offscreen for the focus ring
-   and the lock glyph, and a live run for the typing feel; cargo xtask rules and ci are green.
-  `files: crates/ui/src/scrub.rs, apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
-
 ## Bugs
+- `[ ]` **X38** inside an open product a click selects the whole product instead of the part under the pointer
+  Why: Observation: with a product opened by a double click, every click in the viewport
+   selects the product, while the tree selects and highlights the part under the pointer; an
+   open group already behaves correctly. Expected: an open level exposes its children to the
+   click, so a click lands on the part, a double click enters one level further and Escape
+   leaves. Suspected cause: the open product is `Session::active_product`, view state separate
+   from `Editor.open`, and `target::resolve_viewport_pick` reads only the open set, so the walk
+   up from the hit node stops at the product container.
+  Shape: The rule takes the open product too — one argument to `resolve_viewport_pick`, or the
+   editor folds it into the set it passes — so a closed product still picks as one object and
+   an open one exposes its parts. The rule keeps its shape: a document id in, a document id or
+   `None` out, no mutation.
+  Done: A unit test on `resolve_viewport_pick` with an open product returns the part and with a
+   closed one the product; a frame test opens the fixture product, clicks a panel and asserts
+   the selection and the status bar name the part; `plan/map.md`'s picking row stops claiming a
+   click inside a product picks the product; `cargo xtask ci` is green.
+  `files: crates/ui/src/target.rs, crates/ui/src/editor/selection.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **X39** the inspector's last row hides under the horizontal scroller, and the tree scrolls by a different route
+  Why: Observation: the right panel's content ends flush with the panel's rounded bottom edge
+   and the horizontal scrollbar the inspector needs crosses the last card, so the bottom reads
+   as cut off; the left tree uses its own vertical `ScrollArea` and its own margins, so the two
+   panels do not agree. Expected: both panels keep the same air at the bottom as at the sides,
+   the last row clears the scrollbar, and one helper draws both bodies. Suspected cause:
+   `scroll_body` bounds the body to the panel's inner width but reserves nothing at the bottom,
+   and `main.rs` gives the tree a plain `ScrollArea::vertical` instead of that helper.
+  Shape: `scroll_body` becomes the one scroller of both panels (the tree's private `ScrollArea`
+   goes), with shrinking off, the panel's side inset and a bottom inset of one step plus the
+   scrollbar's own height reserved, so the last row can always be scrolled clear of it.
+   `panel_rect` keeps its geometry; a golden pins the inner content rectangle.
+  Done: A headless test measures the inner content rectangle of both panels and asserts the
+   bottom inset is at least the side inset plus the scrollbar height; an offscreen shot of the
+   longest card and the deepest tree shows no clipped row in either theme; `cargo xtask ci` is
+   green.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs`
 
 ## Next
-- `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
-  later choice of name is one constant and no refactor. The work is measured and scripted in
-  `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
-  identity one home — `theme::PRODUCT_NAME` for the words, an `APP_ID` for the window class and the
-  settings directory set through `ViewportBuilder::with_app_id`, `project::FORMAT` +
-  `project::EXTENSION` for the file — and delete the hardcoded duplicates in `main.rs` (title, app
-  name, error), `scene_build.rs` (`"FurniCraft sample"`), `file_menu.rs` (the `scene.fcs` default and
-  the `"fcs"` filter) and `settings_store.rs` (three platform branches); (2) rename the 13 crates to
-  bare names and move `apps/furnicraft` to `app/` at the workspace root, with the `sed` and `mv` in
-  `plan/rename.md` and `cargo fmt --all` after them; (3) the four registers that must agree in that
-  commit — the `CRATES` table and its tests in `xtask`, the crate map in `AGENTS.md` and `PROJECT.md`,
-  the layer list in `skills/enforce-architecture/SKILL.md`, and the 38 path hints in
-  `plan/BACKLOG.md`, `plan/map.md` and `plan/debt.md`, which the plan gate rejects once the path is
-  gone; (4) the envelope `format`
-  string and line 2 of the eight goldens, leaving the `generator` fixture alone. No compatibility
-  path: nothing is released, so the file format and the settings directory change outright. Measured
-  on a scratch copy of this tree: 1140 tests pass, clippy clean, `layers: ok`, 960 changed lines and
-  no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
-  open-dialog filter all read the constants, so a second rename cannot miss a copy.
-  `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
-- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
-  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
-   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
-   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
-   the writer.
-  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
-   units; the exporter adds the additive columns and declares kerf and trim in the manifest
-   rules block. The package major version does not move.
-  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
-   columns are additive; the golden file records them; cargo xtask ci is green.
-  `files: crates/model/src/catalog.rs`
-- `[ ]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
-  Why: Filed from the class/export planning session: `task add --phase K` created the first
-   task of a new phase, but the paragraph that declares what each phase letter means
-   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
-   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
-   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
-  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
-   <text>` verb appends or updates the legend line in one gated write, so a session can declare
-   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
-   covers adding a phase that the legend does not mention and updating one that it does.
-  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
-   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
-  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
   Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
    process, possibly in Python, and neither the document JSON nor the internal database is a
@@ -167,8 +110,618 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A CLI test writes a package from a fixture and checks its manifest and one table; no
    window opens; the help text names the flags; cargo xtask ci is green.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
+- `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
+  later choice of name is one constant and no refactor. The work is measured and scripted in
+  `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
+  identity one home — `theme::PRODUCT_NAME` for the words, an `APP_ID` for the window class and the
+  settings directory set through `ViewportBuilder::with_app_id`, `project::FORMAT` +
+  `project::EXTENSION` for the file — and delete the hardcoded duplicates in `main.rs` (title, app
+  name, error), `scene_build.rs` (`"FurniCraft sample"`), `file_menu.rs` (the `scene.fcs` default and
+  the `"fcs"` filter) and `settings_store.rs` (three platform branches); (2) rename the 13 crates to
+  bare names and move `apps/furnicraft` to `app/` at the workspace root, with the `sed` and `mv` in
+  `plan/rename.md` and `cargo fmt --all` after them; (3) the four registers that must agree in that
+  commit — the `CRATES` table and its tests in `xtask`, the crate map in `AGENTS.md` and `PROJECT.md`,
+  the layer list in `skills/enforce-architecture/SKILL.md`, and the 38 path hints in
+  `plan/BACKLOG.md`, `plan/map.md` and `plan/debt.md`, which the plan gate rejects once the path is
+  gone; (4) the envelope `format`
+  string and line 2 of the eight goldens, leaving the `generator` fixture alone. No compatibility
+  path: nothing is released, so the file format and the settings directory change outright. Measured
+  on a scratch copy of this tree: 1140 tests pass, clippy clean, `layers: ok`, 960 changed lines and
+  no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
+  open-dialog filter all read the constants, so a second rename cannot miss a copy.
+  Note: U82 removed the sample scene, so the `"FurniCraft sample"` copy named in the entry no
+   longer exists: `plan/rename.md` has been updated and the inventory starts at `main.rs`,
+   `file_menu.rs` and `settings_store.rs`. R1 waits here until the owner chooses a name.
+  `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
+  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
+   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
+   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
+   the writer.
+  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
+   units; the exporter adds the additive columns and declares kerf and trim in the manifest
+   rules block. The package major version does not move.
+  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
+   columns are additive; the golden file records them; cargo xtask ci is green.
+  `files: crates/model/src/catalog.rs`
+- `[ ]` **U84** the method list is one flat list of names: the section captions go
+  Why: The owner asked for the captions to go: a «Build» or «Tangents» heading over one or two
+   rows is a second line to read, it makes a small menu look like a form, and the row's own
+   name already says how the figure is built. They exist only inside the ribbon's variant list
+   (U67, U74) and are the only place a method is grouped.
+  Shape: Delete `Method::section` and `VariantSpec::section` from `toolbars/spec.rs` and the
+   section inheritance in `ToolSpec::default_method`, the `CAPTION_HEIGHT` constant and the
+   caption drawing from `toolbars/list.rs`, and the three `Section*` messages from
+   `crates/text`. The rows keep the order the map declares, so the list is the header plus one
+   row per method; a test asserts the drawn order equals the declared order and that a list's
+   height is `HEADER_HEIGHT` plus rows times `ROW_HEIGHT`. `plan/map.md`'s ribbon row stops
+   naming captions.
+  Done: No caption is drawn for any tool; the circle's list is four rows of names; no
+   `Section*` message remains in `crates/text`; the list-height test passes; `cargo xtask ci`
+   is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/text/src/messages.rs`
+- `[ ]` **U85** the Delete key removes the whole selection behind one question
+  Why: Shift-click builds a multi-selection but nothing deletes it: the tree's row menu removes
+   one node at a time, so a keyboard user cannot remove what they selected, and looping
+   `node.delete` leaves one undo entry per node. The owner asked for the whole set at once,
+   with a confirmation when the key does it.
+  Shape: A new `node.delete.many` in `crates/engine/src/node_cmds.rs` takes `{ nodes: Vec<Id>
+   }`, is enabled when at least one node exists, skips a node whose ancestor is also in the
+   list, removes the rest and returns one changed outcome, so the session records one undo
+   entry; the registry and its tests gain it. `Del` is read in `shortcuts.rs` only with no text
+   field focused and no modal up, and dispatches it for `editor.selected_nodes()`: one node
+   deletes at once because undo covers it, two or more open the question host `file_menu.rs`
+   already owns (`ConfirmClose`) with the count and *Delete*/*Cancel*, Escape cancelling. A
+   locked node refuses the whole operation with the existing `locked_command_refusal` sentence.
+   ADR 0112 records when a destructive key asks and when undo is enough.
+  Done: Tests cover one node, three nodes where one contains another, a locked node and undo
+   restoring all of them in one step; a headless frame test presses Del over two selected nodes
+   and asserts one question with no document change until *Delete*; the label and the question
+   are message ids; ADR 0112 is written; `cargo xtask ci` is green.
+  `files: crates/engine/src/node_cmds.rs, crates/engine/src/commands.rs, apps/furnicraft/src/shortcuts.rs, apps/furnicraft/src/file_menu.rs`
+- `[ ]` **U86** the transform gizmos are smaller and their size is a setting
+  Why: The translate handles are 84 pt (`gizmo_math::HANDLE_LENGTH`) and the rotate rings are 9
+   % of the camera distance (`rotate_gizmo::RING_RADIUS_FACTOR`), so on a small part the gizmo
+   is larger than the part and covers the face the person is judging and the distances the drag
+   measures. A hand that works at 4K and a hand at 1080p want different sizes, so the number
+   belongs in Settings › View rather than in a constant.
+  Shape: A `GizmoSettings { handle_points: u32, ring_percent: u32 }` section in
+   `crates/ui/src/settings.rs` with limits (`MIN`/`MAX_HANDLE_POINTS`,
+   `MIN`/`MAX_RING_PERCENT`), a default well below today's 84 pt and 9 %, and a scrub field for
+   each, clamped on read and repaired like `roll_step_degrees`. `paint_axis_handles` and
+   `hit_axis` take the handle length from the caller so one value serves drawing and picking,
+   `rotate_gizmo` takes its radius factor the same way, and the exact-distance fields follow
+   the anchor. The shell hands the resolved settings to every tab the way it hands
+   `ViewportSettings`; nothing enters the document.
+  Done: Both gizmos are visibly smaller at the default and scale with the two fields;
+   `settings.json` round-trips, clamps 8 and 400, and repairs a broken value instead of costing
+   the file; a headless test drags an axis at the minimum and at the maximum handle length and
+   the hit radius follows; no document revision moves when the size changes; an offscreen shot
+   shows the small and the large gizmo; `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/rotate_gizmo.rs, crates/ui/src/settings.rs`
+- `[ ]` **U87** the transform mode can be off, and Select is the state a window opens in
+  Why: One of the two gizmos is always up, so a person who only wants to look, pick and read
+   works with handles they did not ask for, and a stray press on an axis moves the cabinet. The
+   owner asked for the third state and for Select as the default, which is what a professional
+   editor opens in.
+  Shape: `TransformMode` gains `Select`, the shell defaults to it, and the status bar draws the
+   three as one segmented control. `document.rs` draws and updates a gizmo only in `Move` and
+   `Rotate`; in `Select` a click selects, shift adds, a double click still enters a level, and
+   a press where a handle would be does nothing. The ribbon's two cells stay pressed only while
+   the matching mode is on. The mode stays view state, per run, with no undo entry and no
+   `.fcs` field. A default a user meets on launch is an owner-visible break, so ADR 0113
+   records it.
+  Done: A fresh window draws no handles and a click selects; `Move` and `Rotate` each draw
+   their own gizmo and nothing else; a headless frame test asserts no handle consumes the click
+   in `Select`; the status bar control changes the mode; ADR 0113 is written; `cargo xtask ci`
+   is green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/status_bar.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U88** the viewport draws its own work cursor, sized in settings, with an optional full crosshair
+  Why: The OS arrow hides the point a click lands on and reads as a pointer to buttons rather
+   than to geometry; a small square with a centre dot says this is the point, and a full
+   crosshair lets a person line up two boards across a view. The owner asked for the square, a
+   size that is a setting with limits, and the crosshair as an option. A custom bitmap cursor
+   is not available through eframe 0.37 (`egui::CustomCursorImage` is web-only in the native
+   backend), so the shell draws the cursor itself.
+  Shape: A `PointerSettings { cursor_size: u32, crosshair: bool }` section in
+   `crates/ui/src/settings.rs` (limits 6..=32 pt) with a scrub field and a switch in Settings ›
+   View. While the pointer is over the active scene the shell sets `CursorIcon::None` and
+   paints, on `Order::Middle` over the image and under the chrome, a square of `cursor_size`
+   points centred on the pointer with a 1 pt outline and a 2 pt centre dot in the helper ink
+   (U83), plus, when `crosshair` is on, one 1 pt hairline across the whole viewport width and
+   height. A gesture that owns its own cursor (grab, resize, divider, scrub) keeps the OS icon
+   and the square is not painted; the paint is chrome, so it takes no click, and it never
+   enters the document.
+  Done: Headless tests assert the OS cursor is `None` exactly while the pointer is over the
+   scene and `Default` over a panel, that the square is centred on the pointer at the minimum
+   and the maximum size, and that the crosshair spans the viewport; settings round-trip clamps
+   2 to 6 and 64 to 32; an offscreen shot in both themes shows the square and the crosshair
+   (the eye check this task names); `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/document.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **U89** an open group or product draws its corner brackets, so the open level reads in the viewport
+  Why: An open container and a closed one look identical over the scene: only the tree says
+   which level is open, and once a click inside an open frame selects a part (X38) that
+   difference decides what the next click does. The owner asked for small brackets at the
+   corners — an orientation cue and a statement that the level is open — not a wireframe, which
+   would fight the form edges the renderer already draws.
+  Shape: `scene_build` already computes a `SubtreeBounds` per container in
+   `Evaluation::collect`; the shell collects the bounds of `editor.open` plus
+   `session.active_product()`, projects the eight corners with the view camera and paints, per
+   corner, three short arms along the box's own edges, each arm a fraction (about a fifth,
+   clamped to 6..=18 pt) of the shortest projected edge, in `theme::helper()` at the bracket
+   width (U83). The paint is screen space on `Order::Middle` with the viewport's clip rect,
+   after the image and before the gizmos, so no render pass changes. A closed container, a
+   hidden one and a product that is not open draw nothing; the brackets are view state and no
+   revision moves.
+  Done: Headless geometry tests on a fixed camera pin the eight corner points and the arm
+   length at two zoom levels; a frame test opens a group and counts exactly eight brackets,
+   closes it and counts none, and the same for an open product; the ink is `theme::helper()`;
+   `plan/map.md` gains the row; `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/scene_build.rs, apps/furnicraft/src/scene_gizmo.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U90** the Furniture tab loses the loose Panel cell and offers a panel by contour instead
+  Why: `furniture.panels.panel` creates a panel from a fixed size in a card, outside any
+   product — the pre-frame way of making a board; the product's post and shelf cells make a
+   board where a niche has measured one, and the approved map already holds
+   `furniture.panels.contour` («Panel by contour») as planned. The owner asked for the old cell
+   and its path to go rather than stay as a second way to do the same thing, and the contour
+   cell is what fills the gap.
+  Shape: Delete the cell, `ToolKind::Panel`, `ToolAction::CreatePanel`, `Editor::create_panel`
+   and the ribbon fields only it read; `panel.create` stays, because fill, the palette and the
+   contour cell use it. Promote `furniture.panels.contour` to a live cell that arms a ring
+   drawn in the work plane and dispatches `panel.contour.create` when the draft closes, reusing
+   the drawing draft and the envelope the panel card already has; if the armed drawing cannot
+   land in the same change, the task keeps the cell planned and says so in `plan/notes/U90.md`
+   instead of shipping a second dead cell. The live-cell test, the palette entry and
+   `plan/map.md` follow. Removing an affordance is a break the owner approved, recorded in ADR
+   0114.
+  Done: The Furniture tab draws *Product frame*, *Post*, *Shelf* and *Panel by contour*; no
+   ribbon path reaches `ToolKind::Panel`; no test or spec mentions the removed id; a frame test
+   draws a ring with the contour cell into an open product and finds one panel whose outline is
+   that ring; ADR 0114 is written; `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/ui/src/editor/creation.rs, crates/ui/src/toolbars/ready.rs`
+- `[ ]` **U91** the snap toggle leaves View › Display for a group of its own captioned Snaps
+  Why: The grid-snap toggle sits under View › Display among style, contours, shadows and
+   section switches, so the one control that changes how a click behaves is filed with the ones
+   that change how the scene looks. The owner asked for the caption «Привязки»; a group of its
+   own is the smallest change that says where a snap lives, and it gives the endpoint, axis and
+   object snaps a home.
+  Shape: The map gains a `view.snaps` group (label `GroupSnaps`, «Привязки») holding the grid
+   snap as `view.snaps.grid` with its `G` key and hint unchanged; `view.display` keeps its
+   style, contour, shadow and section tools. The message table gains `GroupSnaps` in both
+   languages, the ids stay namespaced by their group, and the spec's uniqueness and live-group
+   tests cover the new row. No new dependency and no document change.
+  Done: The View tab shows a group captioned «Привязки» with the grid-snap cell and a Display
+   group without it; every id is unique and namespaced; the `G` key still toggles the snap;
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/text/src/messages.rs`
+- `[ ]` **U92** a right click opens the actions of the node under the pointer, from one list the tree and the viewport share
+  Why: The tree row menu is the only context menu in the program: a right click in the viewport
+   draws nothing, so the actions a selected object has are two or three clicks away in the
+   tree, and the tree's own list is built inside an 850-line file. The owner asked for context
+   menus that carry the actions of the object under the pointer.
+  Shape: One module builds the action list for a node kind — a panel, an object, a product
+   container, a group, a camera or a light, the root and empty space — from the command
+   registry and the editor's flags, each entry a command id, its label message, its enabled
+   check and the reason it cannot run. The row menu and a new popup in the viewport draw that
+   list, so an entry cannot exist in one and not the other; the popup is anchored at the
+   pointer, closes on Escape and on an outside click, and is declared to `Chrome::covers`, so a
+   press on it is chrome and never a pick. The viewport reads a right *click* (press and
+   release within a few points) and leaves the right *drag* to the camera pan it already owns.
+   The new module is one row of `HOST_OWNERS` in `xtask/src/ui_rules.rs`. ADR 0115 records the
+   click-versus-drag split and the one-list rule.
+  Done: Right-clicking a panel, a group, a camera and empty space each opens the list that
+   object owns, with the same entries the tree shows for it; right-dragging still pans and
+   opens nothing; a headless frame test right-clicks a panel and asserts the menu's rectangle
+   and its first entry, and that the press changed no document revision; `plan/map.md` and the
+   ui-design skill's `references/surfaces.md` gain the surface; `cargo xtask ci` is green.
+  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U93** the object card is reviewed against the rubric and redesigned as one reading order
+  Why: The card a person reads most is 1780 lines and up to seven collapsible sections stacked
+   under two other cards, so the same fields appear in two places, the first screen is mostly
+   headers, and a mesh object is offered contour, figure, primitive and mesh sections of which
+   at most two can apply. The owner asked for the card to be studied, the excess removed and
+   the design improved; this is the one task of the pass that starts from a measurement rather
+   than from a bug.
+  shape: First the audit the ui-design skill orders: a brief in five lines, the inventory of
+   every section and field with the node kinds that can show it, and three options with their
+   cost in code and in learned conventions. Then the chosen shape — most likely one summary
+   band (kind, size, material, one warning chip), only the fields the selected node can use,
+   the modes (mesh edit, contour edit) as one row of actions rather than four collapsible
+   sections, and a fold state remembered per node kind. Every number stays the shared scrub
+   field, every mutation stays a command, nothing new enters the document; a removed section or
+   a changed reading order is a break the owner approves and ADR 0116 records. The measurement
+   and the rejected options go to `plan/notes/U93.md`.
+  done: The audit and the options are in `plan/notes/U93.md`; the card draws no section that
+   cannot apply to the selected node and no field twice on one screen; a headless test opens a
+   panel, an object and a product frame and asserts the sections drawn for each; an offscreen
+   shot of the three cards in both themes is looked at; ADR 0116 is written when a break ships;
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/object_card.rs, crates/ui/src/editor/cards.rs, crates/ui/src/theme.rs`
 
 ## Done
+
+- `[x]` **X37** an open method list owns the pointer only across part of its own rectangle
+  Why: Observation: with a drawing tool armed, the pointer over an open method list keeps the
+   list's cursor across a row's glyph and name, but the tool cursor comes back over the
+   right-hand part of the row, where the key label and the pin sit, although the whole 298 pt
+   popup is the list. Expected: the popup owns the pointer across its whole width and height —
+   header, rows, key column and pin — and the tool cursor belongs to the viewport, never to a
+   surface drawn over it. Suspected cause: nothing claims the cursor for the popup's own
+   rectangle, so the cursor over it is decided by whichever surface wrote last, and the key
+   label and the reserved pin column fall back to what the viewport wrote for the frame.
+  Shape: One place decides the cursor for the frame: the list claims its own cursor while the
+   pointer is inside the popup rectangle (one rectangle, read from the popup's response, not
+   per row), and the viewport reads the chrome before it writes a tool cursor. A headless test
+   drives `RawInput` with the pointer at four positions across the open list — the header, the
+   name, the key and the pin — asserts one cursor for all four, and asserts the armed tool's
+   cursor returns on the frame the list closes.
+  Done: The whole open list shows one cursor and the frame after it closes shows the tool's;
+   the test fails before the change and passes after; `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/list.rs, apps/furnicraft/src/document.rs` — `caf5f08`
+
+- `[x]` **X36** a split ribbon cell squeezes its main face to 24 pt, so the glyph reads as cut off
+  Why: Observation: a cell is `RIBBON_CELL_WIDTH` (34) x `RIBBON_ROW_HEIGHT` (30), and a tool
+   with methods splits it into a 24 pt main face and a 10 pt caret (`RIBBON_CARET_WIDTH`), so a
+   22 pt glyph sits 1 pt from each edge and the face reads as cut off beside every plain cell.
+   Expected: the face of a tool with methods is a full cell, exactly like a tool without one,
+   and the caret is added to its right. Suspected cause: `ribbon_split_cell` is handed
+   `RIBBON_CELL_WIDTH` and subtracts the caret from it, and `icons.rs`'s own anatomy test
+   asserts the 24 pt face.
+  Shape: The split cell takes `RIBBON_CELL_WIDTH + RIBBON_CARET_WIDTH`, keeps the main face at
+   the full cell and puts the caret outside it, so one row of cells keeps one glyph size and
+   one rhythm; the anatomy test, the width assertion and the ribbon's group columns follow. The
+   caret stays 10 pt, so its target is unchanged.
+  Done: A split cell's main face measures `RIBBON_CELL_WIDTH` and its caret
+   `RIBBON_CARET_WIDTH`, the two touch, the anatomy tests assert the new sizes, a row of mixed
+   plain and split cells reads as one rhythm in an offscreen shot under `target/ui-shots`, and
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs` — `55f372b`
+
+- `[x]` **U83** the program's own guides get one ink and one stroke: the helper ink
+  why: The corner brackets of an open level (U89) and the viewport's own cursor (U88) are the
+   first things FurniCraft draws to help rather than to show the furniture, and the owner asked
+   for the colour and thickness rule before more helper geometry arrives. A guide whose colour
+   is a literal in a feature module is the defect `cargo xtask ui-rules` exists to stop (ADR
+   0063, 0089), and a guide that disappears into the light theme is worse than no guide.
+  Shape: `theme::helper()` returns the ink — a warm amber, mixed from the palette so it keeps
+   its contrast in both variants of all three presets — and `theme::HELPER_STROKE` the rest
+   width; a test pins the contrast against `surface`, `panel` and the viewport background
+   (`scene::SceneColors`) at 3:1 or better and asserts the ink is never the accent, the danger
+   colour or the selection colour. `scene::SceneColors` carries the same ink for a guide the
+   frame draws, resolved once per frame the way the shell resolves it today. The widths are one
+   rule: 1 pt for a full-viewport crosshair, 1.5 pt for a bracket at rest, 2 pt for the bracket
+   that marks the open level. ADR 0111 records the ink, the widths and the rule that a guide is
+   screen space and never document data.
+  Done: The ink and the widths exist in `theme.rs`, the contrast test passes in both variants
+   of all three presets, ADR 0111 is written and listed in `docs/decisions/README.md`, `cargo
+   xtask ui-rules` and `cargo xtask plan` are green, and `plan/map.md` names the ink's home.
+  `files: crates/ui/src/theme.rs, crates/scene/src/lib.rs, docs/decisions` — `2fad7f3`
+
+- `[x]` **N16** a changed bevel angle rebuilds the panel body
+  Why: The mesh cache's panel inputs compared the outline, size, machining and banding but not
+   the end bevels, so a bevel angle change bumped the revision and the evaluator still returned
+   the cached body.
+  Done: PanelInputs records and compares the bevels, and a test changes an angle and asserts
+   the body is rebuilt.
+  `files: crates/mesh/src/lib.rs` — `933416a`
+
+- `[x]` **N15** a shaped fill starts its ring at the panel's zero corner
+  Why: The niche returns the section in its own angular order, so a shaped panel's first corner
+   was not its zero corner; on a board turned about its length axis it sat at the far end and
+   read as a second half-turn.
+  Done: The ring and its bevels rotate together until the zero corner leads; a test on a turned
+   shape asserts vertex 1 is the panel's zero.
+  `files: crates/model/src/project/fill.rs` — `93ce0ce`
+
+- `[x]` **N13** the fill cell has one panel kind and a visible build method
+  Why: The owner reports that the empty-space tool's menu reads like a choice between two
+   panels: the Shape row has no icon and, after picking it, the cell keeps showing the pinned
+   Fit, so the choice looks like it did not take. He asks for one panel whose build method
+   lives in a secondary menu, with a visible selected state.
+  Shape: Keep one cell per panel kind (post, shelf). Put both build methods under a 'Build
+   method' caption in the cell's own method list, give the shape row the polygon glyph, and
+   always draw the tool's glyph on the cell face so the mode never becomes a second panel.
+   While a mode is armed the face shows that method, pressed, with its own hint and its own
+   action (a second click drops the tool); the pinned row keeps marking the workspace default.
+   Rename the rows 'Largest rectangle' and 'Niche shape' / 'Наибольший прямоугольник' and 'По
+   форме ниши'. Record the decision in an ADR.
+  Done: Tests: both fill methods carry a glyph and the build caption; the open list draws the
+   caption and both rows; the armed shape is shown on the cell while Fit is pinned, keeps the
+   post glyph and its click toggles the armed mode; the face keeps the tool glyph for both
+   rows; the existing pin and language tests pass; cargo xtask ci is green.
+  `files: crates/ui/src/toolbars/spec.rs,crates/ui/src/toolbars.rs,crates/ui/src/toolbars/ready.rs,crates/text/src/messages.rs` — `cb99243`
+
+- `[x]` **N14** the niche is bounded by the faces the pointer sees, not by the envelope
+  Why: The owner reports that N9-N12 do not deliver the behaviour: turned panels still blind
+   the pointer, an empty carcass with a top that covers only part of the frame is refused ('the
+   empty space here is not one straight shape'), and pointing at empty space through a
+   world-bounds corner of a turned product answers 'point at the empty space inside the open
+   product'. The pointer also gets no say in what it points at: the shell intersects the ray
+   with the world-axis box around the product envelope, then hands the niche that entry point,
+   and the niche refuses any wall plane that does not cover a whole face of the envelope.
+  Shape: Measure from the face the pointer points at: enter the product's own envelope (never
+   its world bounds), probe along the view ray to the first surface, and place the measured
+   point a micrometre in front of that face; a ray that meets only the far envelope keeps the
+   entry point. Let the face plane bound the cell and drop the whole-face coverage requirement,
+   so a wall that stops halfway or a top that covers part of the case still leaves a niche;
+   keep holds_body for a surface standing inside the cell. Make Shape fall back to the slab cut
+   with no end bevels when the wall planes cannot all be met by one flat end face, instead of
+   refusing. Record the changed rule in ADR 0109 and mark 0106's coverage clause superseded.
+  Done: Tests: a pointer on a wall's inner face measures from that face and the ghost ends at
+   it; a turned product is entered through its own box and a ray through the old world-bounds
+   corner answers nothing; a niche under a short top and between short walls still fills; a
+   wall that stops halfway still yields a full-height niche beside it; Shape under a leaned
+   ceiling takes the slab section with no bevels instead of refusing; the splayed and box fills
+   keep their answers; the shell's one-click-one-undo tests pass with the ghost captured on the
+   press; cargo xtask ci is green.
+  `files: crates/model/src/project/niche.rs,crates/model/src/project/fill.rs,apps/furnicraft/src/fill_gizmo.rs,apps/furnicraft/src/document.rs,docs/domain/products.md,docs/decisions/README.md` — `9773ddc`
+
+- `[x]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
+  Why: This is the point of the bevel: once a part takes the niche's shape, a shelf or a post
+   in a niche bounded by boards turned in space must meet those boards with its end face in
+   their plane, or it stands with a gap. Fit mode is safe but loose; Shape with a square end
+   either cuts in or leaves a wedge of air, which is exactly where the owner saw the failure.
+  Shape: The fill plan of N10, in Shape mode, takes the section at the board's reference face B
+   and gives each outline edge the bevel its wall asks for: with `n` the wall's free-side unit
+   normal in the panel's frame, the wall's rise across the thickness gives `beta = atan(-n_z /
+   abs(n_xy))`, positive for the cut that lands the A edge in the wall, and a wall
+   perpendicular to the board gives zero and no record. Because a bevel only removes material,
+   B must be the wide face: the plan reads the sign of every wall's n_z in the panel's frame,
+   turns the board about its length axis when the wide face is the other side, which is a
+   placement and not a new stance, and refuses a cell whose walls disagree in sign, where no
+   flat board can fill the void. A wall nearly parallel to the board, a floor or a ceiling
+   crossing the slab, makes the void a wedge no flat board can fill: Shape refuses with a
+   sentence and Fit remains. When no edge needs a bevel and the section classifies as a
+   rectangle or a chamfered rectangle, the fill uses the standard path of N10; a beveled board
+   is a contour with bevel records. `panel.create` gains an optional bevel list, so a fill
+   stays one command and one undo entry; the ghost draws the beveled A rim and the wall it
+   meets.
+  Done: Tests: a shelf against a wall leaned 10 degrees gets the exact angle and the wall
+   plane's distance at both ends of the A edge is zero within a micrometre; the same wall
+   leaned the other way turns the board and still meets it; a plumb case gives no bevel and the
+   rectangle panel; a wedge void is refused; the trapezoid of two angled posts stays a contour
+   with no bevels, since the walls are vertical; the ghost's far rim equals the panel's; a
+   click is one undo entry; `cargo xtask ci` is green. A new ADR records the reverse placement
+   and the wedge refusal.
+  `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md` — `925d809`
+
+- `[x]` **N11** a panel's end can be given a bevel angle about its edge
+  Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end
+   face must lie in the wall's plane. The panel is one region extruded along its thickness, so
+   every end face is perpendicular to the two large faces and the only angle it can express is
+   in its own plane; a contour cannot hold the skew. The owner named this as the second
+   difficulty, and without the parameter the fill can only leave a gap or cut in.
+  Shape: `Panel` stores an optional bevel per outline edge: a signed angle in millidegrees
+   about the edge's line, tilting the end face across the thickness. The outline is the edge on
+   face B; face A's edge is set back by `thickness * tan beta`, so a positive angle removes
+   material and the board never grows past its outline, which keeps its nominal size its stock
+   size. The record is keyed by a stable source, an `EdgeId` of the nominal rectangle or a
+   `ContourSegmentId` of a ring, one per source, line segments only, with the angle capped
+   below 89 degrees and the resolved body required to keep one piece and a positive thickness.
+   `param` folds one `PlanStep::Difference` per bevel with a wedge cutter: a small triangle in
+   the plane across the edge, from the B edge to the A edge, extruded along the segment with
+   the usual 1 µm overshoot through `extrusion_plan`; the core region, the analytic rectangle
+   path, the cutouts and the other edges' bands are untouched. A beveled edge cannot carry a
+   band, because the band would follow the nominal edge, so `panel.bevel.set` refuses a banded
+   edge and the banding command refuses a beveled one, each with a sentence. The card gains the
+   angle field and a clear action; the commands are `panel.bevel.set` and `panel.bevel.clear`;
+   the schema moves to 24 and the goldens follow (ADR 0096); a new ADR records the parameter
+   and why the outline is the B face.
+  Done: Tests: a 45-degree bevel on a 100 x 50 x 18 panel removes the expected wedge and keeps
+   the nominal size; a second bevel on another edge accumulates; an arc segment, a duplicate
+   source, a banded edge and an angle at or past the cap are refused with typed errors; banding
+   a beveled edge is refused; the card writes and clears the value; a save/load golden carries
+   the record and a schema other than 24 is a readable error; one command is one undo entry;
+   `cargo xtask ci` is green.
+  `files: crates/model/src/panel/mod.rs, crates/model/src/panel_features.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/mod.rs, crates/engine/src/commands.rs, crates/param/src/lib.rs, crates/param/src/machining.rs, crates/ui/src/panel_card.rs, crates/text/src/messages.rs, crates/project/tests/golden, crates/project/tests/scene_file.rs, docs/domain/panels.md, docs/decisions/README.md` — `82f61db`
+
+- `[x]` **N10** the fill has two modes and prefers a standard panel when the section allows one
+  Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
+   without cutting in, or it takes the whole shape the walls allow. Today there is one shape
+   and no choice, and a post or a shelf is measured only one way. He also asks the program to
+   decide whether the shape can be a standard panel with corner cuts or radii before it falls
+   back to a contour: a contour panel loses `panel.resize`, the rectangle card and its nominal
+   fields (ADR 0042), so the standard path is the one to prefer when it is exact.
+  Shape: `Project` answers one fill plan for the class's `Fill` pair, a material thickness and
+   a mode, and both modes start from the N9 section. Fit returns the largest rectangle with
+   sides on the panel's own axes that lies inside the section, computed exactly from the convex
+   polygon's breakpoints, as a nominal rectangle, and a rectangular section gives itself. Shape
+   returns the section as the panel outline. Before the panel is chosen, a classifier generates
+   the candidate rectangle rings and compares them with the section vertex by vertex within a
+   micrometre: the nominal rectangle stays `PanelOutline::Rect`; a rectangle with asymmetric
+   corner chamfers, the existing `CornerFeatureKind::Chamfer { incoming, outgoing }` with a
+   positive clear length left on every edge, becomes `Rect` with those features; a ring with
+   corner radii becomes `Rect` with `Radius` features; only a section that matches nothing is a
+   contour. The classifier is a pure model function over a ring, so the radius path is tested
+   directly even though the plane-only cell cannot produce an arc until a curved surface query
+   exists. The mode is a method of the fill cell through the ribbon's existing split list: the
+   primary method is Fit, the variant is Shape, the pinned method is the session's choice, and
+   `ToolAction::Fill` carries the mode into `FillArm`. The post and the shelf both offer both
+   modes, and the ghost, the distance fields and `panel.create` read the same plan. A section
+   that is degenerate, not convex, or has no rectangle of a usable size is refused with a
+   sentence.
+  Done: Tests: a trapezoid gives the largest rectangle in Fit and the trapezoid ring in Shape;
+   a plain box gives the same rectangle in both modes; the fit rectangle lies inside every wall
+   over the whole thickness; a rectangle with one asymmetric corner cut becomes `Rect` with one
+   chamfer; a rounded ring given to the classifier directly becomes a radius; a section whose
+   cut would consume an edge is a contour; the mode survives a tool switch and is the one the
+   ghost and the panel carry; a click is one undo entry; `cargo xtask ci` is green.
+  `files: crates/model/src/project/, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/fill.rs, crates/ui/src/editor/ribbon.rs, apps/furnicraft/src/document.rs, crates/text/src/messages.rs, docs/domain/products.md` — `114d79e`
+
+- `[x]` **N9** the niche is a convex cell of wall planes, so boards turned in space are measured
+  Why: The owner reports that a niche bounded by panels turned out of the vertical gives no
+   size and no shape, so neither a post nor a shelf is built; the N7 trapezoid only works when
+   every side board stands plumb. Measured on this tree: a back wall leaned 15 degrees answers
+   `NicheRefusal::Unrepresentable` at every cursor height, a ceiling leaned 10 degrees is
+   measured at the cursor alone (696, 651 and 605 mm of height at y = 20, 280 and 540, so a
+   shelf would cut into it), and a product turned 45 degrees is refused with
+   `NicheRefusal::Turned` although the section is taken in the product's own frame. The cause
+   is the N7 query: four rays along the product's axes are cut with the section plane at the
+   cursor's height and the result is extruded along the height, which is exact only while every
+   wall is vertical and the floor and ceiling are horizontal.
+  Shape: The free space is the intersection of half-spaces. `Project::niche` builds a convex
+   cell in the product's frame: it starts from the envelope's six planes, probes from the point
+   along every current face normal and every cell vertex (plus the envelope's 26 axis, edge and
+   corner directions in the first round), clips the cell by each met face's plane, and repeats
+   until a round adds no plane, with a capped loop that refuses instead of spinning. Each
+   face's plane must still be a surface over the face's extent, which is the current `covered`
+   check run at every face vertex and at the face's middle rather than only at the void's floor
+   and ceiling; no other surface's box corner may lie strictly inside the cell, which is what
+   refuses a void that holds an obstacle, a notch, or two boards meeting halfway. The query
+   reports the product frame's supporting planes (unit free-side normal and offset) and the
+   cell's vertices; `local_min` and `size` stay the box around the cell for the callouts, and a
+   turned product is measured in its own frame, so the `Turned` refusal is deleted. The fill
+   keeps building a board that fits: a shelf takes the cell's section clipped over its
+   thickness, each wall's half-plane evaluated at the far face, as a rectangle or a contour,
+   and a post takes the same section in its own board plane (the panel's local XY against the
+   product's ZY), so a splayed case offers a post again with the depth the slab really has. The
+   box cases answer exactly as they do today. A curved boundary is measured by the box around
+   its body, which is conservative, so a part fits with a gap and never cuts in; an exact
+   curved section needs a surface query that can meet a curved face and is not part of this
+   task.
+  Done: Tests: a leaned wall gives a cell and a shelf that fits it; a leaned ceiling gives the
+   true height over its footprint, not the cursor's; a 45-degree turned product answers instead
+   of `Turned`; the splayed pair, the box, the shelf-split and the half-wall cases keep their
+   current answers, the half wall still refusing; a post stands in the splayed case with the
+   slab's depth; a body standing inside the cell is refused; the ghost equals the created panel
+   in every case; `cargo xtask ci` is green. A new ADR records the cell and the refusal of a
+   non-convex void, and `docs/domain/products.md` section 4 describes it.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, docs/domain/products.md, docs/decisions/README.md` — `09a29e0`
+
+- `[x]` **X35** a post stands on the niche's ceiling, so its first corner is at the top and edge 1 is the top edge
+  Why: The owner read the corner order off a created post and reported it upside down. The fill
+   tool stands the board with from_rotation_y(+FRAC_PI_2), which is the post stance of ADR 0105
+   turned a half-turn about the same axis: the panel's length runs downward, its zero corner —
+   the origin, a corner of the bottom face — lands on the void's ceiling, and edge 1 is the top
+   edge. Nothing looks broken until a band ordered for the top edge arrives on the bottom,
+   which is what id-addressed banding and machining exist to prevent.
+  Shape: In fill_gizmo::post stand the board in the stance — DQuat::from_rotation_y(-FRAC_PI_2)
+   — with the origin at the void's floor corner instead of its ceiling. One detail waits for
+   the owner: with the stance the panel's z = 0 face is the face at the translation and the
+   thickness runs toward -X, so either the pointer's whole-millimetre plane marks that face
+   (body toward -X, the free range starts at minimum.x + gap) or it marks the far face
+   (translation x + gap, body toward +X, which keeps today's ghost in its 18 mm band). The
+   shelf keeps the pointer's height on its own z = 0 face and grows along local +Z, so the
+   first option is the consistent one. niche.rs's angled_post helper builds the same board for
+   the probe tests and follows the stance: the face on the through line stays put, the body
+   stays behind it, so the rotation flips and the translation loses the thickness offset. The
+   height and depth spans do not change.
+  Done: A test in fill_gizmo.rs asserts the stance: the ghost's corner 1 is the bottom corner
+   of the rear edge, corner 2 is 720 mm directly above it, the panel's zero lies on the void's
+   floor, the thickness runs on the chosen side of the pointer plane, and the ghost stays
+   inside the void at both ends of the free travel. The niche and fill tests pass with the
+   updated helper and cargo xtask ci is green.
+  `files: apps/furnicraft/src/fill_gizmo.rs, crates/model/src/project/niche.rs, docs/domain/panels.md` — `8abe395`
+
+- `[x]` **P13** the work order may be empty, and the plan says so instead of inventing a task
+  Why: The order cannot be emptied: closing or deferring the last task in `## Now` is refused,
+   because `STATE: task=` is required and must name the first unfinished task there. A
+   milestone that parks its work in `## Next` — which is exactly where R1, K2, K3 and K4 sit
+   now — leaves the plan unable to say so, so a session either invents a task or leaves a
+   finished one in progress.
+  Shape: The empty order becomes a legal plan state: `STATE: task=-` says no task is scheduled,
+   and the gate accepts that value only while `## Now` holds no unfinished task and nothing is
+   `[~`. `close` and `defer` that empty the order write that value and a `## Next` paragraph
+   that starts with `Nothing is scheduled`; `take` from `## Next` claims the head again and
+   moves `task=` back to an id. `status`, `next` and the dashboard read the empty state instead
+   of failing on a task id of `-`.
+  Done: Tests: closing the last task leaves the order empty and the plan valid; deferring the
+   last one does the same; `task=-` with an open task in `## Now`, or with a `[~` task, is a
+   violation; taking a task from `## Next` restores `task=` and the plan passes; `cargo xtask
+   next` and `status` describe the parked work without a panic; cargo xtask ci is green.
+  `files: state-contract/src/validate.rs, state-contract/src/cli/write.rs` — `67fd5b9`
+
+- `[x]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
+  Why: Filed from the class/export planning session: `task add --phase K` created the first
+   task of a new phase, but the paragraph that declares what each phase letter means
+   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
+   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
+   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
+  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
+   <text>` verb appends or updates the legend line in one gated write, so a session can declare
+   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
+   covers adding a phase that the legend does not mention and updating one that it does.
+  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
+   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
+  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md` — `4bb43e5`
+
+- `[x]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
+  Why: The owner wants the frame created and edited exactly like the box, not with a separate
+   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
+   is card-only while the box has grips, and the two owners of a box disagree.
+  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
+   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
+   and a face one, the card keeping the three numbers and the type. Dragging a min face
+   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
+   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
+   reach the same command. The grips show whenever the frame is selected, including the
+   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
+   fields during the gesture land with N8.
+  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
+   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
+   exactly the ghost size with the placeholder class; the card and the gesture produce the same
+   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
+   green.
+  `files: apps/furnicraft/src/box_gizmo.rs, crates/ui/src/box_tool.rs` — `6f8b62c`
+
+- `[x]` **U82** the editor opens empty: a new scene carries no demonstration panels, edges or groups
+  Why: The startup document is the maker's work surface. Three sample panels, two cutouts,
+   three edges, a group and a drawer teach nothing after the first run and stand in front of
+   the first real piece; a maker who wants a piece now draws one with the frame and box tools.
+  Shape: The shell builds the empty session at launch instead of the demonstration one: a root
+   container named «Scene» and the default catalogue, which is not scene data and stays. The
+   demonstration document survives only where a test needs something to draw, so it becomes a
+   test fixture with a doc comment that says so, and the imports and doc lines that exist only
+   for it go with it.
+  Done: Tests: launching the editor yields a document with no children and a frame that draws
+   nothing, asserted through the function the launcher calls; the fixture still evaluates in
+   the tests that use it; cargo xtask ci is green.
+  `files: apps/furnicraft/src/scene_build.rs, apps/furnicraft/src/main.rs` — `03a076b`
+
+- `[x]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
+  Why: The only solid primitive is a cube with one size for three edges, which nothing in
+   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
+   height, created the way the extrusion tool already works: draw the base, then pull the
+   height. ADR 0101 makes it the shared box the product frame will use too.
+  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
+   height, each validated by the existing primitive bounds, and the mesh builder derives the
+   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
+   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
+   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
+   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
+   drag on a max face changes one size while a min face changes it and compensates the
+   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
+   golden file in the same change; the schema is bumped with no migration (0096).
+  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
+   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
+   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
+   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
+   messages no longer mention a cube; cargo xtask ci is green.
+  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs` — `ce8ce93`
+
+- `[x]` **N8** the exact-distance fields: type a distance, lock it, centre it, with the keyboard
+  Why: A maker cannot place a post to the millimetre with a mouse, and the same need appears in
+   three gestures: filling a niche, drawing a box or a frame, and moving a piece. The probe
+   exists (N6, ADR 0103); without the fields it is a measurement nobody can state exactly.
+   Studied as behaviour in an established editor, the mechanism is a live distance field per
+   direction with one active field — not a dialog.
+  Shape: A session overlay draws one shared number field per direction of the work plane from
+   the new face to the first surface the probe found, with the unit outside (ADR 0092); exactly
+   one field is active and shows the focus ring from the theme. Typing takes the mouse out of
+   the gesture for that direction, Enter commits, Escape returns the mouse, Tab moves to the
+   opposite direction. A field offers the semantic value «По центру» / Centred in its menu,
+   which places the part in the middle of the void and yields a computed coordinate. A
+   committed distance shows a lock and the next is measured from the locked face. A direction
+   with no neighbour disables the field with a sentence; an impossible value is refused with a
+   message and writes nothing; the whole gesture is one undo entry. The overlay is shared by
+   the niche fill, the box gesture and the move tool, and the numbers come from the model
+   probe, never from a second computation.
+  Done: Tests over the pure parts: the active field, Tab, Enter and Escape move focus and
+   commit or abandon without a write; a lock makes the second distance relative to the locked
+   face; the centred value produces the midpoint coordinate; a missing neighbour disables the
+   field; an impossible value is refused. The overlay is checked offscreen for the focus ring
+   and the lock glyph, and a live run for the typing feel; cargo xtask rules and ci are green.
+  `files: crates/ui/src/scrub.rs, apps/furnicraft/src/main.rs, crates/ui/src/theme.rs` — `168362e`
 
 - `[x]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
   Why: The owner named the trapezoid case as part of the feature, not as a later refinement:

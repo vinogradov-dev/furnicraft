@@ -17,7 +17,7 @@
 //! Every row is a constant, so the ribbon allocates nothing to read the map.
 
 use furnicraft_engine::PrimitiveKind;
-use furnicraft_model::ClassCode;
+use furnicraft_model::{ClassCode, FillMode};
 use furnicraft_text::Message;
 
 use crate::draw::DrawTool;
@@ -45,10 +45,18 @@ pub enum ToolKind {
     Extrude,
     /// Opens the card that creates a product frame.
     Product,
+    /// Draws the product frame's reserved box: base rectangle, then height, then `product.create`.
+    ProductDraw,
     /// Creates a panel at the scene root.
     Panel,
-    /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair.
-    Fill(ClassCode),
+    /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair, and `mode`
+    /// says whether the part takes the largest rectangle that fits or the whole section.
+    Fill {
+        /// The class a post or a shelf fills the void with.
+        class: ClassCode,
+        /// How the part reads the section the walls leave.
+        mode: FillMode,
+    },
     /// Creates an assembly at the scene root.
     Assembly,
     /// Creates a camera at the scene root.
@@ -107,6 +115,29 @@ impl Method {
         self.run.is_some()
     }
 }
+
+/// The post's second method: take the whole section instead of the largest fit.
+///
+/// A fill cell draws as one split cell rather than two cells a maker has to tell apart: the method
+/// list is the choice between fitting and taking the shape, and the pinned method is the one the
+/// cell runs (U74, ADR 0110). The section caption says the rows are two builds of one panel, not
+/// two panels, and each row carries its own glyph so the shape is not a blank line.
+const FILL_POST_SHAPE: &[VariantSpec] = &[VariantSpec {
+    id: "furniture.panels.post.shape",
+    label: Message::FillMethodShape,
+    icon: Some(icons::contour::POLYGON),
+    run: Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
+    section: Some(Message::SectionFillMethod),
+}];
+
+/// The shelf's second method: take the whole section instead of the largest fit.
+const FILL_SHELF_SHAPE: &[VariantSpec] = &[VariantSpec {
+    id: "furniture.panels.shelf.shape",
+    label: Message::FillMethodShape,
+    icon: Some(icons::contour::POLYGON),
+    run: Some(ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape }),
+    section: Some(Message::SectionFillMethod),
+}];
 
 /// One tool: one cell of a group's row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,7 +246,10 @@ impl GroupSpec {
         self.tools.iter().any(ToolSpec::is_live)
     }
 
-    /// The number of cells the group's row takes: one per live tool.
+    /// The number of tool cells the group's row takes: one per live tool.
+    ///
+    /// A tool with more than one method also asks for the caret column beside its cell, so the drawn
+    /// row is wider than this count by one caret per listed tool (X36).
     pub fn columns(&self) -> usize {
         self.tools.iter().filter(|tool| tool.is_live()).count()
     }
@@ -243,7 +277,10 @@ impl TabSpec {
         self.groups.iter().any(GroupSpec::is_live)
     }
 
-    /// The number of cells the tab's body takes, which is the width of its row in cells.
+    /// The number of tool cells the tab's body takes, one per live tool of its groups.
+    ///
+    /// A split cell adds its caret column beside its cell, so this is the pitch the row keeps and not
+    /// its drawn width (X36).
     pub fn columns(&'static self) -> usize {
         self.live_groups().map(GroupSpec::columns).sum()
     }
@@ -575,11 +612,11 @@ const MODEL: [GroupSpec; 5] = [
         label: Message::GroupPrimitives,
         tools: &[
             ToolSpec {
-                id: "model.primitives.cube",
-                label: Message::ToolCube,
-                icon: Some(icons::primitives::CUBE),
+                id: "model.primitives.cuboid",
+                label: Message::ToolBox,
+                icon: Some(icons::primitives::CUBOID),
                 shortcut: None,
-                run: Some(ToolKind::Primitive(PrimitiveKind::Cube)),
+                run: Some(ToolKind::Primitive(PrimitiveKind::Cuboid)),
                 method: None,
                 variants: &[],
             },
@@ -666,7 +703,15 @@ const FURNITURE: [GroupSpec; 6] = [
             shortcut: None,
             run: Some(ToolKind::Product),
             method: None,
-            variants: &[],
+            // The card is the numeric method and the drawn box the pointer method; the split cell
+            // runs whichever the workspace pinned (U74, ADR 0101).
+            variants: &[VariantSpec {
+                id: "furniture.product.frame.draw",
+                label: Message::ToolProductFrameDraw,
+                icon: Some(icons::scene::PRODUCT),
+                run: Some(ToolKind::ProductDraw),
+                section: None,
+            }],
         }],
     },
     GroupSpec {
@@ -687,18 +732,18 @@ const FURNITURE: [GroupSpec; 6] = [
                 label: Message::ToolPost,
                 icon: Some(icons::scene::POST),
                 shortcut: None,
-                run: Some(ToolKind::Fill(ClassCode::VERTICAL_PANEL)),
-                method: None,
-                variants: &[],
+                run: Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit }),
+                method: Some(Message::FillMethodFit),
+                variants: FILL_POST_SHAPE,
             },
             ToolSpec {
                 id: "furniture.panels.shelf",
                 label: Message::ToolShelf,
                 icon: Some(icons::scene::SHELF),
                 shortcut: None,
-                run: Some(ToolKind::Fill(ClassCode::HORIZONTAL_PANEL)),
-                method: None,
-                variants: &[],
+                run: Some(ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit }),
+                method: Some(Message::FillMethodFit),
+                variants: FILL_SHELF_SHAPE,
             },
             planned("furniture.panels.contour", Message::ToolContourPanel),
         ],
@@ -986,7 +1031,7 @@ mod tests {
         );
         assert_eq!(
             live("model"),
-            ["model.create.extrude", "model.primitives.cube", "model.primitives.cylinder", "model.primitives.sphere",]
+            ["model.create.extrude", "model.primitives.cuboid", "model.primitives.cylinder", "model.primitives.sphere",]
         );
         assert_eq!(
             live("furniture"),
@@ -997,22 +1042,67 @@ mod tests {
     }
 
     #[test]
+    fn the_model_tab_offers_a_box_and_names_no_cube() {
+        // The one solid primitive is a box with three independent sides; the cube, its edge and its
+        // message left the ribbon with schema 23 (ADR 0101).
+        let model = tab("model").expect("the model tab");
+        for tool in model.live_groups().flat_map(GroupSpec::live_tools) {
+            let label = tool.label.text(furnicraft_text::Lang::En);
+            assert!(!tool.id.contains("cube"), "{} is still a cube cell", tool.id);
+            assert!(!label.contains("Cube"), "{} still says cube", tool.id);
+        }
+        let box_tool = model
+            .live_groups()
+            .flat_map(GroupSpec::live_tools)
+            .find(|tool| tool.run == Some(ToolKind::Primitive(PrimitiveKind::Cuboid)))
+            .expect("the box cell");
+        assert_eq!(box_tool.id, "model.primitives.cuboid");
+        assert_eq!(box_tool.label.text(furnicraft_text::Lang::En), "Box");
+        assert_eq!(box_tool.icon, Some(icons::primitives::CUBOID));
+    }
+
+    #[test]
+    fn the_frame_cell_offers_the_card_and_the_drawn_method() {
+        let frame = tab("furniture")
+            .expect("furniture")
+            .live_groups()
+            .flat_map(GroupSpec::live_tools)
+            .find(|tool| tool.id == "furniture.product.frame")
+            .expect("the frame cell");
+        let methods: Vec<_> = frame.methods().map(|method| (method.id, method.run)).collect();
+        assert_eq!(
+            methods,
+            vec![
+                ("furniture.product.frame", Some(ToolKind::Product)),
+                ("furniture.product.frame.draw", Some(ToolKind::ProductDraw)),
+            ],
+            "the card is the tool's own method, the drawn box its second (ADR 0101)"
+        );
+        let drawn = frame.variants.first().expect("the drawn method");
+        assert_eq!(drawn.label.text(furnicraft_text::Lang::En), "Frame by drawing");
+        assert!(drawn.run.is_some(), "the split cell only offers a method that runs");
+    }
+
+    #[test]
     fn every_tool_kind_appears_exactly_once() {
         let kinds = [
             ToolKind::CloseDraft,
             ToolKind::CancelDraft,
             ToolKind::Extrude,
             ToolKind::Product,
+            ToolKind::ProductDraw,
             ToolKind::Panel,
-            ToolKind::Fill(ClassCode::VERTICAL_PANEL),
-            ToolKind::Fill(ClassCode::HORIZONTAL_PANEL),
+            ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit },
+            ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape },
+            ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit },
+            ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape },
             ToolKind::Assembly,
             ToolKind::Camera,
             ToolKind::Light,
             ToolKind::FrameAll,
             ToolKind::Projection,
             ToolKind::GridSnap,
-            ToolKind::Primitive(PrimitiveKind::Cube),
+            ToolKind::Primitive(PrimitiveKind::Cuboid),
             ToolKind::Primitive(PrimitiveKind::Cylinder),
             ToolKind::Primitive(PrimitiveKind::Sphere),
             ToolKind::Draw(DrawTool::Line),

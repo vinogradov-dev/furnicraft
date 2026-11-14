@@ -43,10 +43,10 @@ pub use object_cmds::{
     ObjectPathExtrude, ObjectPathReplace, ObjectPrimitiveCreate, ObjectPrimitiveReplace, PrimitiveKind,
 };
 pub use panel_cmds::{
-    PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
-    PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMachiningAdd, PanelMachiningMove,
-    PanelMachiningRemove, PanelMachiningUpdate, PanelMaterialSet, PanelOutlineSet, PanelOutlineToContour, PanelRename,
-    PanelResize, PanelRingBandingClear, PanelRingBandingSet,
+    PanelBevelClear, PanelBevelSet, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet,
+    PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMachiningAdd,
+    PanelMachiningMove, PanelMachiningRemove, PanelMachiningUpdate, PanelMaterialSet, PanelOutlineSet,
+    PanelOutlineToContour, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
 };
 pub use preview::Preview;
 pub use product_cmds::{ProductCreate, ProductEnvelopeSet};

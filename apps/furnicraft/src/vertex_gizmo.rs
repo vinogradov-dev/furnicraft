@@ -309,7 +309,7 @@ mod tests {
     use std::f64::consts::FRAC_PI_2;
 
     use furnicraft_geom::DQuat;
-    use furnicraft_model::{Geometry, Mesh, Placement};
+    use furnicraft_model::{Geometry, Placement};
     use furnicraft_testkit::{millimetres, sample_project};
 
     use super::*;
@@ -317,7 +317,7 @@ mod tests {
     fn cube_project() -> (Project, Id) {
         let mut project = sample_project();
         let root = project.root().id();
-        let mesh = Mesh::cube(millimetres(100)).expect("cube");
+        let mesh = furnicraft_testkit::cube_mesh(millimetres(100));
         let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("object");
         (project, id)
     }

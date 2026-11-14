@@ -47,8 +47,6 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   pick pass can hide the back vertices when the first large mesh makes it matter.
 - `[mesh]` Mesh editing selects and moves vertices and whole faces; there is no edge selection and no
   face extrusion yet.
-- `[mesh]` A cube is created at the parent origin and centred on it, so half of a default cube sits
-  below the floor until it is moved.
 - `[perf]` Vertex picking and marker painting walk every vertex of the edited mesh each frame; a large
   mesh needs a spatial index or a GPU id pass. Face picking walks every polygon and its fan triangles
   each click.
@@ -125,7 +123,7 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
 - `[ui]` A creation tool lands at the scene root since X4; a node inside a container needs the
   explicit *Add child* arm of U31. Until then the only way is to create at the root and move the row
   in the tree.
-- `[ui]` The ribbon's *Model* tab wants a cone beside the cube, cylinder and sphere, but
+- `[ui]` The ribbon's *Model* tab wants a cone beside the box, cylinder and sphere, but
   `PrimitiveKind` has no `Cone` and `crates/param` builds no cone solid, so the tab draws the three
   primitives the document really has. A cone needs the model variant, the kernel plan and the drawn
   `primitives/cone` asset in one change; drawing the icon alone would offer a tool that cannot build.
@@ -231,3 +229,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   the whole span: two boards that meet in the middle with the envelope behind them would pass as one
   wall. The union of the coplanar faces' extents would close it; the samples are one micrometre apart
   and no furniture case this tree builds has such a gap (N7).
+- `[gizmo]` A niche bounded by a curved surface — a bent panel, a rounded body, a cylinder — is
+  measured by the box around that body: the cell is conservative, so a part fits with a gap and never
+  cuts in, but it does not follow the curve. An exact curved section needs a surface query that can
+  meet a curved face and a section that can hold arcs; the cell, the fill and the bevel are planes
+  only (N9, N12).

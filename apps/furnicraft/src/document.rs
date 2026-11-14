@@ -37,11 +37,12 @@ use furnicraft_scene::{
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{
-    CommandBar, CommandBarAction, ContourGrip, DrawDraft, Editor, GripValue, MeshElement, Message, PaletteContext,
-    ViewFlags, command_bar,
+    BoxDraft, CommandBar, CommandBarAction, ContourGrip, DistanceFields, DistanceOutcome, Distances, DrawDraft, Editor,
+    FieldPlacement, GripValue, MeshElement, Message, PaletteContext, Side, ViewFlags, command_bar,
 };
 use furnicraft_units::Length;
 
+use crate::box_gizmo::{self, BoxEvent, BoxGrips, GripUpdate};
 use crate::contour_gizmo;
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::{DrawAction, DrawGizmo, DrawModifiers};
@@ -295,6 +296,16 @@ pub(crate) struct Document {
     pub(crate) extrude_gizmo: ExtrudeGizmo,
     /// The empty-space tool's ghost; armed by the ribbon, it follows the pointer and creates a part.
     pub(crate) fill_gizmo: FillGizmo,
+    /// The grips of the selected box: four base corners and six faces, one drag each.
+    pub(crate) box_grips: BoxGrips,
+    /// The exact-distance fields of the running fill gesture: their pins, locks and keyboard.
+    pub(crate) distance_fields: DistanceFields,
+    /// The measurement the fields draw, rebuilt from the ghost every frame (ADR 0103).
+    pub(crate) distances: Option<Distances>,
+    /// The plates the fields drew last frame, so a press on one is chrome and never a pick.
+    pub(crate) distance_rects: Vec<egui::Rect>,
+    /// The exact distances of the translate drag in progress, measured once when it starts.
+    move_distances: Option<MoveDistances>,
     /// The corner orientation widget, which owns the roll-ring drag across frames.
     gizmo: gizmo::Gizmo,
     highlighted: Vec<Id>,
@@ -372,6 +383,11 @@ impl Document {
             draw_gizmo: DrawGizmo::new(),
             extrude_gizmo: ExtrudeGizmo::default(),
             fill_gizmo: FillGizmo::default(),
+            box_grips: BoxGrips::default(),
+            distance_fields: DistanceFields::default(),
+            distances: None,
+            distance_rects: Vec::new(),
+            move_distances: None,
             gizmo: gizmo::Gizmo::default(),
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -500,6 +516,12 @@ impl Document {
     /// Draws the inspector's body.
     pub(crate) fn show_card(&mut self, ui: &mut egui::Ui) {
         self.editor.show_card(ui, &mut self.session);
+    }
+
+    /// Whether the command bar drew last frame, for the shot that looks at it.
+    #[cfg(test)]
+    pub(crate) fn command_bar_is_up(&self) -> bool {
+        self.command_bar_rect.is_some()
     }
 
     /// Takes back one command and reports a refusal in the status bar.
@@ -933,6 +955,115 @@ impl Document {
         }
     }
 
+    /// The single box the grips act on: the selection, when it is exactly one box — a cuboid
+    /// primitive or a product frame, which own the same three lengths (ADR 0101).
+    fn grip_target(&self) -> Option<Id> {
+        let selected = self.editor.selected_nodes();
+        let [only] = selected else {
+            return None;
+        };
+        crate::box_gizmo::is_box(self.session.project(), *only).then_some(*only)
+    }
+
+    /// Reads one frame of the box gesture: the live base, the pulled height, and the click that
+    /// anchors it, fixes it or accepts it.
+    ///
+    /// A click that fixes the base starts the pull; every frame of the pull reads the pointer along
+    /// the plane's normal, so the height is a number of millimetres rather than a screen distance.
+    /// The last click, or the command bar's ✓, is the one command the gesture writes (ADR 0101).
+    fn update_box(&mut self, ui: &mut egui::Ui, response: &egui::Response, rect: egui::Rect) {
+        let plane = WorkPlane::from_camera(self.scene.camera);
+        let Some(draft) = self.editor.box_draft().copied() else {
+            return;
+        };
+        let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
+        if draft.is_pulling() {
+            if let (Some(pointer), Some(base)) = (pointer, draft.base())
+                && let Some(height) = box_gizmo::pulled_height(self.scene.camera, rect, plane, base.corner, pointer)
+                && let Err(error) = self.editor.pull_box_height(height)
+            {
+                self.last_error = Some(error.to_string());
+            }
+        } else if let Some(pointer) = pointer
+            && let Some(corner) = box_gizmo::plane_point(self.scene.camera, rect, plane, pointer)
+        {
+            self.editor.set_box_corner(corner);
+        }
+        match box_gizmo::update_box(ui, response, rect, self.scene.camera, plane, &draft) {
+            Some(BoxEvent::Click(corner)) => {
+                if let Err(error) = self.editor.click_box(corner) {
+                    self.last_error = Some(error.to_string());
+                }
+            }
+            Some(BoxEvent::Commit) => {
+                if let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx())) {
+                    self.last_error = Some(error);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Reads one frame of the box grips and writes the sides they reach.
+    ///
+    /// One press mints the edit scope and every move writes through it, so a whole drag is one undo
+    /// entry; the release ends the gesture and writes nothing more (ADR 0092).
+    fn update_box_grips(&mut self, ui: &mut egui::Ui, response: &egui::Response, rect: egui::Rect) {
+        let Some(object) = self.grip_target() else {
+            return;
+        };
+        let update = self.box_grips.update(
+            ui,
+            rect,
+            self.scene.camera,
+            self.session.project(),
+            Some(object),
+            response.hover_pos(),
+        );
+        match update {
+            GripUpdate::Press(grip) => {
+                let scope = self.session.edit_scope();
+                self.box_grips.begin(object, grip, scope);
+            }
+            GripUpdate::Edit(edit) => {
+                let Some(scope) = self.box_grips.scope() else {
+                    return;
+                };
+                match box_gizmo::apply_grip_edit(&mut self.session, edit, scope) {
+                    Ok(()) => {
+                        if let Err(error) = self.refresh() {
+                            self.last_error = Some(error);
+                        }
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            GripUpdate::Idle => {}
+        }
+    }
+
+    /// Commits the box the pull shows; idempotent, because the committed gesture leaves no draft.
+    ///
+    /// `lang` names the frame a drawn product frame becomes, as the card's create does.
+    pub(crate) fn finish_box(&mut self, lang: furnicraft_text::Lang) -> Result<(), String> {
+        let plane = WorkPlane::from_camera(self.scene.camera);
+        box_gizmo::commit_box(&mut self.session, &mut self.editor, plane, lang)?;
+        self.refresh()
+    }
+
+    /// Drops the box gesture and, with it, a grip drag; the document keeps what its last command
+    /// wrote unless the drag had not ended, in which case its edit is rolled back.
+    pub(crate) fn cancel_box(&mut self) {
+        if let Some(scope) = self.box_grips.scope()
+            && self.session.cancel_edit(scope)
+            && let Err(error) = self.refresh()
+        {
+            self.last_error = Some(error);
+        }
+        self.box_grips.end();
+        self.editor.cancel_box();
+    }
+
     /// Measures the void under the pointer and keeps the ghost the next click would create.
     ///
     /// The model answers the measurement; the shell only maps the pointer to the face of the open
@@ -940,37 +1071,218 @@ impl Document {
     /// re-measures nothing.
     fn update_fill(
         &mut self,
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         response: &egui::Response,
         rect: egui::Rect,
         arm: Option<furnicraft_ui::FillArm>,
+        opacity: u32,
     ) {
         let Some(arm) = arm else {
-            self.fill_gizmo.reset();
+            self.reset_fill(ui.ctx());
             return;
         };
         let Some(product) = self.session.active_product() else {
             // A closed, deleted or undone product ends the tool: a niche is only offered inside the
             // open piece (ADR 0098), so the arm would have nothing to point at.
             self.editor.cancel_fill();
-            self.fill_gizmo.reset();
+            self.reset_fill(ui.ctx());
             return;
         };
         let Some(thickness) = self.fill_thickness() else {
-            self.fill_gizmo.reset();
+            self.reset_fill(ui.ctx());
             return;
         };
-        let point = response.hover_pos().or_else(|| response.interact_pointer_pos()).and_then(|pointer| {
+        // A press or a hover on a field is chrome, so the viewport's own response calls it a miss;
+        // the field still belongs to this gesture, so the raw pointer measures through it.
+        let on_field = |pointer: egui::Pos2| self.distance_rects.iter().any(|rect| rect.contains(pointer));
+        let pointer = response
+            .hover_pos()
+            .or_else(|| response.interact_pointer_pos())
+            .or_else(|| ui.input(|input| input.pointer.hover_pos()).filter(|pointer| on_field(*pointer)));
+        let point = pointer.and_then(|pointer| {
             let ray = gizmo_math::ray_to(pointer, rect, self.scene.camera);
-            let (min, max) = fill_gizmo::envelope_box(self.session.project(), product)?;
-            fill_gizmo::envelope_entry(ray, min, max)
+            fill_gizmo::pointer_point(self.session.project(), product, ray)
         });
-        let Some(point) = point else {
-            self.fill_gizmo.reset();
+        let Some(point) = point.or_else(|| {
+            // The field sits outside the envelope's silhouette now and then; the gesture keeps the
+            // point it was measured at rather than dropping the ghost under the maker's cursor.
+            ui.input(|input| input.pointer.hover_pos())
+                .filter(|pointer| on_field(*pointer))
+                .and_then(|_| self.fill_gizmo.measured_point())
+        }) else {
+            self.reset_fill(ui.ctx());
             return;
         };
-        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness) {
+        // A number typed into a field pins the free position; the pointer drives it otherwise.
+        let free = self.distances.as_ref().and_then(Distances::pinned_low);
+        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, arm.mode, thickness, free) {
             ui.ctx().request_repaint();
+        }
+        let Some(ghost) = self.fill_gizmo.ghost().cloned() else {
+            self.distances = None;
+            self.distance_rects.clear();
+            return;
+        };
+        let Some(parent_world) = self.session.project().world_placement(product) else {
+            self.distances = None;
+            self.distance_rects.clear();
+            return;
+        };
+        let axis = furnicraft_model::free_axis(arm.fill);
+        let unit = axis_unit(axis);
+        let low_wall = ghost.niche.local_min[axis];
+        let high_wall = ghost.niche.local_max()[axis];
+        let low_face = ghost.free_low;
+        let high_face = ghost.free_high;
+        let mut distances = match self.distances.take() {
+            Some(mut measured) => {
+                measured.sync(Some(low_wall), Some(high_wall), low_face, high_face);
+                measured
+            }
+            None => {
+                let Some(measured) = Distances::new(Some(low_wall), Some(high_wall), low_face, high_face) else {
+                    self.distance_rects.clear();
+                    return;
+                };
+                measured
+            }
+        };
+        let (Some(low_point), Some(high_point)) = (ghost.low_face(), ghost.high_face()) else {
+            self.distances = Some(distances);
+            self.distance_rects.clear();
+            return;
+        };
+        let axis_world = parent_world.transform_vector(unit);
+        let mut placements = Vec::new();
+        let painter = ui.painter().with_clip_rect(rect);
+        for (side, face, face_scalar) in [(Side::Low, low_point, low_face), (Side::High, high_point, high_face)] {
+            let wall = if side == Side::Low { low_wall } else { high_wall };
+            let wall_point = face + axis_world * (wall - face_scalar);
+            let middle = (face + wall_point) * 0.5;
+            let (Some(face_screen), Some(wall_screen), Some(middle_screen)) = (
+                gizmo_math::screen_point(self.scene.camera, rect, face),
+                gizmo_math::screen_point(self.scene.camera, rect, wall_point),
+                gizmo_math::screen_point(self.scene.camera, rect, middle),
+            ) else {
+                continue;
+            };
+            painter
+                .line_segment([face_screen, wall_screen], egui::Stroke::new(1.0, furnicraft_ui::theme::text_dim(ui)));
+            placements.push(FieldPlacement { side, position: middle_screen });
+        }
+        let outcome: DistanceOutcome = self.distance_fields.show(ui, &mut distances, &placements, opacity);
+        self.distance_rects = outcome.rects;
+        if let Some(message) = self.distance_fields.error() {
+            self.last_error = Some(message.text(furnicraft_ui::language(ui.ctx())).to_owned());
+        }
+        let pinned = distances.pinned_low();
+        if outcome.changed {
+            // The typed number or the midpoint moved the ghost: measure it again at that exact
+            // coordinate before the frame paints, so the picture and the field agree.
+            self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, arm.mode, thickness, pinned);
+            ui.ctx().request_repaint();
+        }
+        self.distances = Some(distances);
+    }
+
+    /// Drops the empty-space ghost and the exact-distance fields that measured it.
+    fn reset_fill(&mut self, ctx: &egui::Context) {
+        self.fill_gizmo.reset();
+        self.distance_fields.dismiss(ctx);
+        self.distances = None;
+        self.distance_rects.clear();
+    }
+
+    /// Whether this frame's press landed on a distance field rather than on the scene.
+    fn distance_covers(&self, response: &egui::Response) -> bool {
+        response
+            .interact_pointer_pos()
+            .is_some_and(|pointer| self.distance_rects.iter().any(|rect| rect.contains(pointer)))
+    }
+
+    /// The world distance a typed move distance has fixed, relative to the drag's start.
+    fn move_pinned(&self) -> Option<f64> {
+        let measure = self.move_distances.as_ref()?;
+        let low = measure.distances.pinned_low()?;
+        Some(low - measure.start_low)
+    }
+
+    /// Measures the moving box and the two surfaces along the drag axis, once per drag.
+    fn measure_move(&self, node: Id, axis: gizmo_math::Axis) -> Option<MoveDistances> {
+        measure_move(self.session.project(), node, axis)
+    }
+
+    /// Draws the exact-distance fields of the translate drag and reads their numbers.
+    fn show_move_distances(&mut self, ui: &mut egui::Ui, rect: egui::Rect, opacity: u32) {
+        let (Some(axis), Some(node)) = (self.translate_gizmo.axis(), self.translate_gizmo.anchor()) else {
+            self.clear_move_distances(ui.ctx());
+            return;
+        };
+        if !self.translate_gizmo.exact_axis() {
+            self.clear_move_distances(ui.ctx());
+            return;
+        }
+        if self.move_distances.as_ref().is_none_or(|measured| measured.node != node || measured.axis != axis) {
+            self.distance_fields.dismiss(ui.ctx());
+            self.move_distances = self.measure_move(node, axis);
+        }
+        let Some(measure) = self.move_distances.as_mut() else {
+            self.distance_rects.clear();
+            return;
+        };
+        let direction = axis.direction();
+        let delta = self.translate_gizmo.drag_delta().dot(direction);
+        let low = measure.start_low + delta;
+        let high = low + measure.extent;
+        measure.distances.sync(measure.wall_low, measure.wall_high, low, high);
+        let low_face = measure.low_face + direction * delta;
+        let high_face = measure.high_face + direction * delta;
+        // The walls stay where the start measurement found them; only the faces travel.
+        let low_wall_point = measure.wall_low.map(|wall| measure.low_face + direction * (wall - measure.start_low));
+        let high_wall_point =
+            measure.wall_high.map(|wall| measure.high_face + direction * (wall - (measure.start_low + measure.extent)));
+        let painter = ui.painter().with_clip_rect(rect);
+        let mut placements = Vec::new();
+        for (side, face, wall_point) in
+            [(Side::Low, low_face, low_wall_point), (Side::High, high_face, high_wall_point)]
+        {
+            let middle = wall_point.map_or(face, |wall_point| {
+                let (Some(face_screen), Some(wall_screen)) = (
+                    gizmo_math::screen_point(self.scene.camera, rect, face),
+                    gizmo_math::screen_point(self.scene.camera, rect, wall_point),
+                ) else {
+                    return face;
+                };
+                painter.line_segment(
+                    [face_screen, wall_screen],
+                    egui::Stroke::new(1.0, furnicraft_ui::theme::text_dim(ui)),
+                );
+                (face + wall_point) * 0.5
+            });
+            let Some(middle_screen) = gizmo_math::screen_point(self.scene.camera, rect, middle) else {
+                continue;
+            };
+            let position = egui::Pos2::new(
+                middle_screen.x.clamp(rect.left() + 90.0, (rect.right() - 90.0).max(rect.left() + 90.0)),
+                middle_screen.y.clamp(rect.top() + 26.0, (rect.bottom() - 26.0).max(rect.top() + 26.0)),
+            );
+            placements.push(FieldPlacement { side, position });
+        }
+        let outcome = self.distance_fields.show(ui, &mut measure.distances, &placements, opacity);
+        self.distance_rects = outcome.rects;
+        if let Some(message) = self.distance_fields.error() {
+            self.last_error = Some(message.text(furnicraft_ui::language(ui.ctx())).to_owned());
+        }
+        if outcome.changed {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Drops the translate drag's measurement and its fields.
+    fn clear_move_distances(&mut self, ctx: &egui::Context) {
+        if self.move_distances.take().is_some() {
+            self.distance_fields.dismiss(ctx);
+            self.distance_rects.clear();
         }
     }
 
@@ -997,7 +1309,8 @@ impl Document {
             ghost.parent,
             name,
             ghost.nominal_size,
-            ghost.outline.clone(),
+            Some(ghost.outline.clone()),
+            ghost.bevels.clone(),
             ghost.placement,
             Some(arm.class),
         )
@@ -1010,6 +1323,10 @@ impl Document {
     /// field's range or cannot be parsed is refused by the field itself, so the preview keeps the
     /// last height the document could hold.
     fn show_command_bar(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, opacity: u32) {
+        if self.editor.box_draft().is_some_and(BoxDraft::is_pulling) {
+            self.show_box_bar(ui, viewport, opacity);
+            return;
+        }
         let Some(object) = self.extrude_gizmo.object() else {
             self.command_bar_rect = None;
             return;
@@ -1053,6 +1370,55 @@ impl Document {
                 }
             }
             Some(CommandBarAction::Cancel) => self.cancel_extrude(),
+            None => {}
+        }
+    }
+
+    /// Draws the box height's command bar: its field pulls the ghost, ✓ commits the one command.
+    ///
+    /// The bar is the typed twin of the pointer pull (ADR 0101): a maker who knows the height types
+    /// it, and the ghost the field drives is the box the ✓ creates.
+    fn show_box_bar(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, opacity: u32) {
+        let Some(height) = self.editor.box_draft().map(BoxDraft::height).filter(|height| height.is_positive()) else {
+            self.command_bar_rect = None;
+            return;
+        };
+        let mut millimetres = height.millimetres_f64();
+        let maximum = box_gizmo::MAX_SIDE_MM as f64;
+        // A frame's pull is the height it reserves, not a solid's edge: the bar says which box it
+        // is sizing (ADR 0101).
+        let label = match self.editor.box_tool() {
+            Some(furnicraft_ui::BoxOwner::Product) => Message::FrameHeight,
+            Some(furnicraft_ui::BoxOwner::Cuboid) | None => Message::BoxHeight,
+        };
+        let outcome = command_bar::show(
+            ui,
+            viewport,
+            CommandBar {
+                label,
+                value: &mut millimetres,
+                unit: "mm",
+                range: box_gizmo::MIN_SIDE_MM as f64..=maximum,
+                decimals: 3,
+                focus: false,
+            },
+            opacity,
+        );
+        self.command_bar_rect = Some(outcome.rect);
+        let whole = millimetres.round();
+        if let Some(next) = Length::from_millimetres(whole as i64)
+            && next != height
+            && let Err(error) = self.editor.pull_box_height(next)
+        {
+            self.last_error = Some(error.to_string());
+        }
+        match outcome.action {
+            Some(CommandBarAction::Apply) => {
+                if let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx())) {
+                    self.last_error = Some(error);
+                }
+            }
+            Some(CommandBarAction::Cancel) => self.cancel_box(),
             None => {}
         }
     }
@@ -1247,6 +1613,7 @@ impl Document {
         // the user drags it over a panel, so releasing there still commits the move.
         let capturing = self.translate_gizmo.is_dragging()
             || self.rotate_gizmo.is_dragging()
+            || self.box_grips.is_dragging()
             || self.vertex_gizmo.is_dragging()
             || self.contour_gizmo.is_dragging()
             || self.extrude_gizmo.is_dragging()
@@ -1257,8 +1624,11 @@ impl Document {
         // A drawing tool owns it too: the left button places points, not selections. A click on the
         // chrome is never a point, so the tool waits for a click on the scene.
         let drawing = interactive && !pointer_on_chrome && self.editor.drawing().is_some();
-        // An armed primitive owns the next click: it places a cube, it does not select.
+        // An armed primitive owns the next click: it places a cylinder or a sphere, it does not
+        // select. The box tool owns a whole gesture instead: two clicks for the base, one for the
+        // height (ADR 0101).
         let placing = interactive && !pointer_on_chrome && self.editor.pending_primitive().is_some();
+        let boxing = interactive && !pointer_on_chrome && self.editor.box_draft().is_some();
         // The pull arrow is the live gesture after an extrusion. A contour edit, a draft, a
         // placement or a sub-object mode takes the pointer from it, so the arrow never competes
         // with a grip, a point or a cube for the same click.
@@ -1266,6 +1636,7 @@ impl Document {
             && (contour_editing
                 || drawing
                 || placing
+                || boxing
                 || self.editor.mesh_edit().is_some()
                 || self.editor.fill_arm().is_some())
         {
@@ -1283,7 +1654,8 @@ impl Document {
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = shell.cluster.navigation;
-        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling && !filling;
+        let navigating =
+            navigation.is_some() && !contour_editing && !drawing && !placing && !boxing && !pulling && !filling;
         let mesh_object = if !interactive || contour_editing || drawing || placing || pulling || filling {
             None
         } else {
@@ -1429,17 +1801,45 @@ impl Document {
             }
         }
 
+        if boxing {
+            self.update_box(ui, &response, rect);
+        }
+
+        // A grip drag resizes a selected box in place: a press mints the edit scope that makes the
+        // whole drag one undo entry, and every move writes the sides the pointer reaches (ADR 0092).
+        let gripping = interactive
+            && !contour_editing
+            && !drawing
+            && !placing
+            && !boxing
+            && !pulling
+            && !filling
+            && self.grip_target().is_some();
+        if gripping {
+            self.update_box_grips(ui, &response, rect);
+        } else if !self.box_grips.is_dragging() {
+            self.box_grips = BoxGrips::default();
+        }
+
         if filling {
-            self.update_fill(ui, &response, rect, fill_arm);
+            self.update_fill(ui, &response, rect, fill_arm, opacity);
             if response.clicked_by(egui::PointerButton::Primary)
                 && !pointer_over_widget
                 && !pointer_on_chrome
-                && let Err(error) = self.create_fill(furnicraft_ui::language(ui.ctx()))
+                && !self.distance_covers(&response)
             {
-                self.last_error = Some(error);
+                match self.create_fill(furnicraft_ui::language(ui.ctx())) {
+                    Ok(()) => {
+                        // The next void is a fresh gesture: its fields may take the keyboard again.
+                        self.distance_fields.dismiss(ui.ctx());
+                        self.distances = None;
+                        self.distance_rects.clear();
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
             }
         } else {
-            self.fill_gizmo.reset();
+            self.reset_fill(ui.ctx());
         }
 
         let target = gizmo_math::Target {
@@ -1455,8 +1855,10 @@ impl Document {
             || contour_editing
             || drawing
             || placing
+            || boxing
             || pulling
             || filling
+            || self.box_grips.is_dragging()
             || navigating
             || mesh_object.is_some()
             || locked_selection.is_some()
@@ -1464,7 +1866,10 @@ impl Document {
             Ok(None)
         } else {
             match shell.mode {
-                TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+                TransformMode::Move => {
+                    let pinned = self.move_pinned();
+                    self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget, pinned)
+                }
                 TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
             }
         };
@@ -1476,6 +1881,11 @@ impl Document {
             }
             Ok(None) => {}
             Err(error) => self.last_error = Some(error),
+        }
+        if shell.mode == TransformMode::Move && self.translate_gizmo.is_dragging() {
+            self.show_move_distances(ui, rect, opacity);
+        } else {
+            self.clear_move_distances(ui.ctx());
         }
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
@@ -1492,16 +1902,17 @@ impl Document {
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing || drawing || placing || pulling || filling {
-            true
-        } else if mesh_object.is_some() {
-            self.vertex_gizmo.consumed_click()
-        } else {
-            match shell.mode {
-                TransformMode::Move => self.translate_gizmo.consumed_click(),
-                TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
-            }
-        };
+        let consumed_click =
+            if contour_editing || drawing || placing || boxing || pulling || filling || self.box_grips.is_dragging() {
+                true
+            } else if mesh_object.is_some() {
+                self.vertex_gizmo.consumed_click()
+            } else {
+                match shell.mode {
+                    TransformMode::Move => self.translate_gizmo.consumed_click(),
+                    TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
+                }
+            };
 
         // Looking through an authored camera pins the view: navigation would move a camera the
         // document owns, and a command is the only way to edit document data. The gesture acts on
@@ -1583,8 +1994,8 @@ impl Document {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
         } else if pulling {
             ui.ctx().set_cursor_icon(self.extrude_gizmo.cursor());
-        } else if placing || filling {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+        } else if placing || boxing || filling {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         } else if navigating {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         } else if dragging || response.dragged() {
@@ -1608,6 +2019,7 @@ impl Document {
         if !contour_editing
             && !drawing
             && !placing
+            && !boxing
             && !pulling
             && clicked
             && !pointer_over_gizmo
@@ -1787,6 +2199,9 @@ impl Document {
             }
         } else if let Some(draft) = self.editor.drawing() {
             self.draw_gizmo.paint(ui, rect, self.scene.camera, draft);
+        } else if let Some(draft) = self.editor.box_draft().copied() {
+            let plane = WorkPlane::from_camera(self.scene.camera);
+            box_gizmo::paint_box(ui, rect, self.scene.camera, plane, response.hover_pos(), &draft);
         } else if let Some(object) = mesh_object {
             let target = vertex_gizmo::MeshTarget {
                 camera: self.scene.camera,
@@ -1804,6 +2219,9 @@ impl Document {
             // axis under the pointer would compete with the camera drag, and a locked node draws no
             // handles because the drag it would start is refused.
         } else {
+            // A box shows its grips instead of nothing: the faces and the base corners are the
+            // three-side editor, and the placement handles still act beside them.
+            self.box_grips.paint(ui, rect, self.scene.camera, self.session.project(), self.grip_target());
             match shell.mode {
                 TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
                 TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
@@ -1836,7 +2254,12 @@ impl Document {
         // The cluster floats over the drawn viewport, so it is the last thing painted inside it. A
         // command bar takes the bottom-centre slot while a previewing operation runs, so the
         // cluster moves up by the bar's height and the two never overlap.
-        let bar_offset = if self.extrude_gizmo.is_active() { command_bar::BAR_HEIGHT + 6.0 } else { 0.0 };
+        let bar_offset = if self.extrude_gizmo.is_active() || self.editor.box_draft().is_some_and(BoxDraft::is_pulling)
+        {
+            command_bar::BAR_HEIGHT + 6.0
+        } else {
+            0.0
+        };
         let view = ClusterView {
             owns_view: viewport_owns_view(self.session.project()),
             projection: self.scene.camera.projection(),
@@ -2063,6 +2486,10 @@ impl Document {
         if rect.is_some() {
             shell.ribbon_rect = rect;
         }
+        // An open method list hangs under the band and over the scene: the shell keeps its rectangle
+        // so the viewport reads a press or the pointer inside it as chrome, and the list's own cursor
+        // is the one the frame shows (X37).
+        shell.list_rect = outcome.as_ref().and_then(|outcome| outcome.list_rect);
         let mut open_product_card = false;
         if let Some(outcome) = outcome {
             open_product_card = outcome.open_product_card;
@@ -2150,6 +2577,18 @@ impl Document {
             if escape && !ui.ctx().text_edit_focused() {
                 self.editor.cancel_primitive();
             }
+        } else if self.editor.box_draft().is_some() || self.box_grips.is_dragging() {
+            // Escape drops the base, the pull or the grip drag; the grip's edit scope is rolled
+            // back, so a cancelled resize leaves no trace at all.
+            if escape {
+                self.cancel_box();
+            } else if enter
+                && !ui.ctx().text_edit_focused()
+                && self.editor.box_draft().is_some_and(BoxDraft::is_pulling)
+                && let Err(error) = self.finish_box(furnicraft_ui::language(ui.ctx()))
+            {
+                self.last_error = Some(error);
+            }
         } else if self.extrude_gizmo.is_active() {
             // Escape drops the pull and its preview whatever has the focus: the field's text is part
             // of the preview, so a cancel is never only a text cancel. Enter is the bar's when the
@@ -2169,6 +2608,9 @@ impl Document {
             && !self.rotate_gizmo.is_dragging()
             && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
+            // The exact-distance field owns Escape while it is active: the key returns that
+            // direction to the pointer, and the armed tool stays armed (ADR 0103).
+            && !self.distances.as_ref().is_some_and(Distances::is_active)
         {
             if modals {
                 // The modal owns Escape for this frame and closes itself.
@@ -2182,7 +2624,7 @@ impl Document {
                 // Escape leaves the empty-space tool before it leaves a container level: the tool is
                 // the mode the next click uses.
                 self.editor.cancel_fill();
-                self.fill_gizmo.reset();
+                self.reset_fill(ui.ctx());
             } else if self.editor.creation_parent().is_some() {
                 // The arm outranks leaving a container level: it is the mode the next creation uses,
                 // and the chip names it until Escape or ✕ clears it (ADR 0056).
@@ -2265,6 +2707,74 @@ fn viewport_owns_view(project: &Project) -> bool {
 /// click to the scene.
 fn widget_placement(cluster: &ViewCluster, view: egui::Rect, chrome: &Chrome) -> Option<egui::Rect> {
     if cluster.widget_visible() { gizmo::widget_rect(view, chrome) } else { None }
+}
+
+/// The exact distances of one translate drag, measured once when the drag starts.
+///
+/// The walls and the start faces are snapshots: the document still holds the start placements, so
+/// the preview, the fields and the release read one measurement (ADR 0103).
+#[derive(Clone, Copy, Debug)]
+struct MoveDistances {
+    /// The anchor node the measurement was taken on.
+    node: Id,
+    /// The world axis the drag runs along.
+    axis: gizmo_math::Axis,
+    /// The low face's world coordinate along the axis at the drag start.
+    start_low: f64,
+    /// The moved box's extent along the axis.
+    extent: f64,
+    /// The world centres of the two start faces.
+    low_face: furnicraft_geom::DVec3,
+    high_face: furnicraft_geom::DVec3,
+    /// The surfaces that stop the two faces, in the axis's world coordinates.
+    wall_low: Option<f64>,
+    wall_high: Option<f64>,
+    /// The measurement the fields draw and the numbers they pin.
+    distances: Distances,
+}
+
+/// Measures the moving box and the two surfaces along a drag axis (ADR 0103).
+///
+/// A translate drag reads this once, when it starts: the document still holds the start placements,
+/// so the preview, the fields and the release commit one measurement.
+fn measure_move(project: &Project, node: Id, axis: gizmo_math::Axis) -> Option<MoveDistances> {
+    let (min, max) = project.world_box(node)?;
+    let direction = axis.direction();
+    let (low, high) = (min.dot(direction), max.dot(direction));
+    if !(low.is_finite() && high.is_finite()) || high <= low {
+        return None;
+    }
+    // The face centres, which is where the probe and the field anchors sit.
+    let centre = (min + max) * 0.5;
+    let low_face = centre - direction * (centre.dot(direction) - low);
+    let high_face = centre + direction * (high - centre.dot(direction));
+    // A probe starting exactly on a face can meet that face; one micrometre outside it cannot.
+    const INSET_MM: f64 = 1.0e-3;
+    let wall_low =
+        project.probe(low_face - direction * INSET_MM, -direction).map(|probe| low - INSET_MM - probe.distance_mm);
+    let wall_high =
+        project.probe(high_face + direction * INSET_MM, direction).map(|probe| high + INSET_MM + probe.distance_mm);
+    let distances = Distances::new(wall_low, wall_high, low, high)?;
+    Some(MoveDistances {
+        node,
+        axis,
+        start_low: low,
+        extent: high - low,
+        low_face,
+        high_face,
+        wall_low,
+        wall_high,
+        distances,
+    })
+}
+
+/// The world axis a product-frame axis index names.
+fn axis_unit(axis: usize) -> furnicraft_geom::DVec3 {
+    match axis {
+        0 => furnicraft_geom::DVec3::X,
+        1 => furnicraft_geom::DVec3::Y,
+        _ => furnicraft_geom::DVec3::Z,
+    }
 }
 
 /// Whether a finish still has to write the height.
@@ -2397,13 +2907,42 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_geom::{DMat4, DQuat, DVec3};
-    use furnicraft_model::{CameraProjection, LightKind};
+    use furnicraft_model::{CameraProjection, ClassCode, Container, Envelope, LightKind};
     use furnicraft_scene::Projection;
     use furnicraft_testkit::{millimetres, sample_project};
 
     use super::*;
     use crate::icons;
     use crate::view_cluster::projection_button;
+
+    #[test]
+    fn a_typed_move_distance_pins_the_gap_to_the_next_surface() {
+        // Two 600 mm pieces stand 400 mm apart: the probe finds the right wall and nothing on the
+        // left, so one field is live and one is disabled.
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("an empty project");
+        let root_id = project.root().id();
+        let envelope = || Envelope::new(millimetres(600), millimetres(600), millimetres(600)).expect("a box");
+        let moved = project
+            .add_product(root_id, "Moved", ClassCode::GENERAL_PRODUCT, envelope(), Placement::IDENTITY)
+            .expect("a product");
+        let beside = Placement::new(DVec3::new(1000.0, 0.0, 0.0), DQuat::IDENTITY).expect("a placement");
+        project
+            .add_product(root_id, "Beside", ClassCode::GENERAL_PRODUCT, envelope(), beside)
+            .expect("a second product");
+        let measure = measure_move(&project, moved, gizmo_math::Axis::X).expect("two faces");
+        assert_eq!(measure.start_low, 0.0);
+        assert_eq!(measure.extent, 600.0);
+        assert_eq!(measure.wall_low, None, "nothing stands to the left");
+        let wall_high = measure.wall_high.expect("the second piece is the right wall");
+        assert!((wall_high - 1000.0).abs() < 1.0e-6, "the shell face is the surface: {wall_high}");
+        let mut distances = measure.distances;
+        assert_eq!(distances.value(Side::High), Some(400.0));
+        distances.place(Side::High, 100.0).expect("the piece fits the gap");
+        assert!((distances.low() - 300.0).abs() < 1.0e-9, "{:?}", distances.low());
+        let pinned = distances.pinned_low().expect("the typed distance pins the low face");
+        assert!((pinned - measure.start_low - 300.0).abs() < 1.0e-9, "the drag delta is the typed gap");
+    }
 
     #[test]
     fn a_cheap_rebuild_is_never_announced() {
@@ -2495,7 +3034,7 @@ mod tests {
     fn the_display_switch_hides_the_corner_widget_without_touching_the_document() {
         // The widget is a view-state drawing, so its switch is one: a press on it draws nothing on
         // the next frame and cannot reach the document (U73).
-        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let session = crate::scene_build::demo_session().expect("the sample scene");
         let revision = session.project().revision();
         let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
         let chrome = Chrome {
@@ -2504,6 +3043,7 @@ mod tests {
                 view.min,
                 egui::vec2(view.width(), furnicraft_ui::toolbars::height(true)),
             ),
+            list: None,
         };
         let mut cluster = ViewCluster::default();
         assert!(cluster.widget_visible(), "the corner widget is on until the switch turns it off");
@@ -2519,7 +3059,7 @@ mod tests {
 
     #[test]
     fn a_theme_switch_repaints_the_frame_without_touching_the_document() {
-        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let session = crate::scene_build::demo_session().expect("the sample scene");
         let mut cache = EvaluationCache::new();
         let mut kernel = TruckKernel::new();
         let evaluated =

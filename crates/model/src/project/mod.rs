@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod camera_light_cmds;
 mod error;
+mod fill;
 #[cfg(test)]
 mod frame_contract;
 mod move_query;
@@ -25,8 +26,9 @@ mod surface;
 mod wire;
 
 pub use error::ProjectError;
+pub use fill::{FillMode, FillPlan, FillRefusal, free_axis};
 pub use move_query::{MoveAxis, MoveLimit, MoveRule};
-pub use niche::{Niche, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit};
+pub use niche::{Niche, NichePlane, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit};
 pub use surface::SurfaceKind;
 pub(crate) use wire::ProjectWire;
 
@@ -55,7 +57,7 @@ impl Project {
     /// A file with any other number is refused with one readable sentence, older and newer alike:
     /// before the first release the format has no past, so there is no migration and no alias for a
     /// field an earlier layout used (ADR 0096). Bumping this number is the whole procedure.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 22;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 24;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;

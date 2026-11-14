@@ -16,7 +16,11 @@ impl Project {
     pub fn validate_panel_resize(&self, id: Id, nominal_size: PanelNominalSize) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let geometry = panel.geometry_for(nominal_size, panel.last_known_thickness())?;
-        validate_panel_machining(panel, &geometry)
+        validate_panel_machining(panel, &geometry)?;
+        if panel.bevel_violation(nominal_size, &geometry)?.is_some() {
+            return Err(ProjectError::BevelRemovesBody { panel: id });
+        }
+        Ok(())
     }
 
     /// Replaces a panel's nominal size and bumps the revision once.
@@ -49,6 +53,9 @@ impl Project {
         let anchored = Panel::anchored_contour(contour)?;
         Panel::contour_size(&anchored)?;
         validate_ring_banding(&anchored, panel.ring_banding())?;
+        let mut candidate = panel.clone();
+        candidate.set_outline(PanelOutline::Contour { contour: anchored });
+        candidate.validate_bevels()?;
         Ok(())
     }
 
@@ -115,6 +122,7 @@ impl Project {
         candidate.set_nominal_size(nominal_size);
         candidate.set_outline(PanelOutline::Contour { contour: anchored });
         candidate.set_contour_banding(baked.banding().to_vec(), baked.order().to_vec());
+        candidate.set_bevels(baked.bevels().to_vec());
         candidate.geometry_with_fallbacks()?;
         Ok(candidate)
     }
@@ -161,6 +169,10 @@ impl Project {
     /// Checks whether a banding can be placed without making the core non-positive.
     pub fn validate_edge_banding(&self, id: Id, band: EdgeBanding) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let on = EdgeRef::Rect { edge: band.edge() };
+        if panel.bevel_at(on).is_some() {
+            return Err(ProjectError::BandOnBeveledEdge { panel: id, on });
+        }
         let mut candidate = panel.clone();
         candidate.apply_edge_banding(band)?;
         candidate.geometry_with_fallbacks()?;
@@ -327,9 +339,61 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether one end bevel can be applied without invalidating the panel.
+    ///
+    /// The candidate keeps the record, so the source rule (a straight, unbanded edge of this
+    /// panel's own outline) and the body rule (the far face stays one positive piece) are the same
+    /// checks the loader and the evaluator rely on. Nothing is written here.
+    pub fn validate_panel_bevel(&self, id: Id, bevel: EdgeBevel) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let on = bevel.source();
+        if panel.bevel_at(on).is_none() && panel.has_band_on(on) {
+            return Err(ProjectError::BevelOnBandedEdge { panel: id, on });
+        }
+        let mut candidate = panel.clone();
+        candidate.upsert_bevel(bevel);
+        candidate.validate_bevels()?;
+        let geometry = candidate.geometry_with_fallbacks()?;
+        if candidate.bevel_violation(candidate.nominal_size(), &geometry)?.is_some() {
+            return Err(ProjectError::BevelRemovesBody { panel: id });
+        }
+        Ok(())
+    }
+
+    /// Adds or replaces the bevel on one outline edge and bumps the revision once.
+    pub fn set_panel_bevel(&mut self, id: Id, bevel: EdgeBevel) -> Result<Revision, ProjectError> {
+        self.validate_panel_bevel(id, bevel)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.upsert_bevel(bevel);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes the bevel on one outline edge and bumps the revision once.
+    pub fn clear_panel_bevel(&mut self, id: Id, on: EdgeRef) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if panel.bevel_at(on).is_none() {
+            return Err(ProjectError::BevelNotFound { panel: id, on });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_bevel(on);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Checks whether ring banding can be set without invalidating the panel.
     pub fn validate_ring_banding(&self, id: Id, band: RingBanding) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let on = EdgeRef::Ring { segment: band.segment() };
+        if panel.bevel_at(on).is_some() {
+            return Err(ProjectError::BandOnBeveledEdge { panel: id, on });
+        }
         let mut candidate = panel.clone();
         candidate.apply_ring_banding(band)?;
         candidate.geometry_with_fallbacks()?;
@@ -543,6 +607,65 @@ impl Project {
         Ok(id)
     }
 
+    /// Adds a panel with the outline a tool measured, in one revision.
+    ///
+    /// A stored ring is rebased exactly as [`Project::add_panel_contour`] does it, so the panel's
+    /// zero corner stays the ring's base corner. A rectangle outline keeps its nominal size and may
+    /// carry corner treatments; the generator that will draw it runs here, so a cut that consumes a
+    /// whole edge is refused before the panel enters the tree rather than on the first frame. The
+    /// end bevels a shaped fill measured travel in the same call, so the part is born finished and
+    /// one click stays one revision and one undo entry (ADR 0107, ADR 0108). One call is one
+    /// revision, which is what makes a fill click one undo entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_panel_with_outline(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        nominal_size: PanelNominalSize,
+        outline: PanelOutline,
+        bevels: &[EdgeBevel],
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
+        let outline = match outline {
+            PanelOutline::Contour { contour } => {
+                return self.add_panel_contour_with_bevels(
+                    parent,
+                    name,
+                    &contour,
+                    bevels,
+                    material,
+                    last_known_thickness,
+                    placement,
+                );
+            }
+            outline => outline,
+        };
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let mut panel = Panel::new(id, name, nominal_size, material, last_known_thickness, placement)?;
+        panel.set_outline(outline);
+        panel.nominal_contour()?;
+        panel.set_bevels(bevels.to_vec());
+        panel.validate_bevels()?;
+        if !bevels.is_empty() {
+            let geometry = panel.geometry_with_fallbacks()?;
+            if panel.bevel_violation(panel.nominal_size(), &geometry)?.is_some() {
+                return Err(ProjectError::BevelRemovesBody { panel: id });
+            }
+        }
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Panel(panel));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
     /// Adds a panel whose outline is a contour ring selected in the scene.
     ///
     /// The ring is rebased so its bounds base corner is the panel-local zero (ADR 0083): the ring
@@ -560,6 +683,24 @@ impl Project {
         last_known_thickness: Length,
         placement: Placement,
     ) -> Result<Id, ProjectError> {
+        self.add_panel_contour_with_bevels(parent, name, contour, &[], material, last_known_thickness, placement)
+    }
+
+    /// Adds a contour panel with the end bevels a shaped fill measured, in one revision.
+    ///
+    /// The bevels name ring segments of the contour it is born with, so the record and the outline
+    /// cannot disagree: both are validated against the candidate panel before it enters the tree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_panel_contour_with_bevels(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        contour: &Contour,
+        bevels: &[EdgeBevel],
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
         if !self.is_container(parent) {
             return Err(ProjectError::ContainerNotFound { id: parent });
         }
@@ -567,7 +708,16 @@ impl Project {
         let id = self.allocate_id()?;
         let rebased = rebase_origin_at(contour.clone(), placement, FrameAnchor::BASE_CORNER)
             .map_err(|_| ProjectError::CreationFrame { id })?;
-        let panel = Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
+        let mut panel =
+            Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
+        panel.set_bevels(bevels.to_vec());
+        panel.validate_bevels()?;
+        if !bevels.is_empty() {
+            let geometry = panel.geometry_with_fallbacks()?;
+            if panel.bevel_violation(panel.nominal_size(), &geometry)?.is_some() {
+                return Err(ProjectError::BevelRemovesBody { panel: id });
+            }
+        }
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };
@@ -1407,5 +1557,189 @@ mod tests {
         let world_max_y = max[1] as f64 / 1000.0 + translation.y;
         assert!((world_min_y - before.0.y).abs() < 1e-9, "world bottom {world_min_y}");
         assert!((world_max_y - before.1.y).abs() < 1e-9, "world top {world_max_y}");
+    }
+
+    /// A bevel about one rectangle edge, at `millidegrees`.
+    fn bevel(edge: RectEdge, millidegrees: i64) -> EdgeBevel {
+        EdgeBevel::new(EdgeRef::Rect { edge: edge.id() }, furnicraft_units::Degrees::from_millidegrees(millidegrees))
+            .expect("a bevel")
+    }
+
+    /// A 100 x 50 mm panel, the worked example of the bevel tests.
+    fn small_panel(project: &mut Project) -> Id {
+        let root = project.root().id();
+        let nominal = PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size");
+        project.add_panel(root, "End", nominal, None, sample_thickness(), Placement::IDENTITY).expect("panel")
+    }
+
+    /// A ring whose second segment is a quarter arc at the bottom-right corner.
+    fn rounded_ring() -> Contour {
+        Contour::new(vec![
+            ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(90), millimetres(0)]).expect("line"),
+            ContourSegment::arc(
+                [millimetres(90), millimetres(10)],
+                millimetres(10),
+                furnicraft_units::Degrees::from_millidegrees(-90_000),
+                furnicraft_units::Degrees::from_millidegrees(90_000),
+            )
+            .expect("quarter arc"),
+            ContourSegment::line([millimetres(100), millimetres(10)], [millimetres(100), millimetres(50)])
+                .expect("line"),
+            ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)]).expect("line"),
+            ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(0), millimetres(0)]).expect("line"),
+        ])
+        .expect("a rounded ring")
+    }
+
+    #[test]
+    fn a_panel_end_takes_a_bevel_and_one_clear_removes_it() {
+        let mut project = sample_project();
+        let id = small_panel(&mut project);
+        let revision = project.revision();
+
+        let bottom = bevel(RectEdge::Bottom, 45_000);
+        project.set_panel_bevel(id, bottom).expect("set the bevel");
+        assert_eq!(project.revision(), revision.checked_next().expect("revision"));
+        let panel = project.panel(id).expect("panel");
+        assert_eq!(panel.bevel_at(bottom.source()), Some(bottom));
+        assert_eq!(panel.bevels(), &[bottom]);
+        assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size"));
+
+        // A second bevel on another edge accumulates instead of replacing the first.
+        let top = bevel(RectEdge::Top, 30_000);
+        project.set_panel_bevel(id, top).expect("set the second bevel");
+        let panel = project.panel(id).expect("panel");
+        let stored: Vec<EdgeRef> = panel.bevels().iter().map(|bevel| bevel.source()).collect();
+        assert_eq!(stored, vec![bottom.source(), top.source()]);
+
+        // Re-applying a source replaces its angle instead of adding a second record.
+        let again = bevel(RectEdge::Bottom, 20_000);
+        project.set_panel_bevel(id, again).expect("change the angle");
+        let panel = project.panel(id).expect("panel");
+        assert_eq!(panel.bevels().len(), 2, "one record per source");
+        assert_eq!(panel.bevel_at(bottom.source()), Some(again));
+
+        project.clear_panel_bevel(id, bottom.source()).expect("clear the first bevel");
+        let panel = project.panel(id).expect("panel");
+        assert_eq!(panel.bevel_at(bottom.source()), None);
+        assert_eq!(panel.bevel_at(top.source()), Some(top));
+        assert_eq!(
+            project.clear_panel_bevel(id, bottom.source()),
+            Err(ProjectError::BevelNotFound { panel: id, on: bottom.source() })
+        );
+    }
+
+    #[test]
+    fn a_bevel_and_a_band_exclude_each_other_on_one_edge() {
+        let mut project = sample_project();
+        let id = small_panel(&mut project);
+        let revision = project.revision();
+
+        project
+            .set_edge_banding(
+                id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), false, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("band the bottom edge");
+        let banded = bevel(RectEdge::Bottom, 45_000);
+        assert_eq!(
+            project.validate_panel_bevel(id, banded),
+            Err(ProjectError::BevelOnBandedEdge { panel: id, on: banded.source() })
+        );
+        assert_eq!(project.panel(id).expect("panel").bevels(), &[]);
+
+        // The other direction: an edge that carries a bevel cannot take a band.
+        let left = bevel(RectEdge::Left, 45_000);
+        project.set_panel_bevel(id, left).expect("bevel an unbanded edge");
+        let band = EdgeBanding::new(RectEdge::Left.id(), sample_material(), false, millimetres(2), millimetres(22))
+            .expect("band");
+        assert_eq!(
+            project.validate_edge_banding(id, band.clone()),
+            Err(ProjectError::BandOnBeveledEdge { panel: id, on: left.source() })
+        );
+        assert!(project.set_edge_banding(id, band).is_err());
+
+        // A steep angle on a narrow panel would take the whole far face.
+        let steep = bevel(RectEdge::Top, 75_000);
+        assert_eq!(project.validate_panel_bevel(id, steep), Err(ProjectError::BevelRemovesBody { panel: id }));
+
+        // A bowed edge has no straight outline segment to tilt an end face about.
+        project
+            .set_edge_bow(id, EdgeBow::new(RectEdge::Right.id(), millimetres(4)).expect("bow"))
+            .expect("bow the right edge");
+        let curved = bevel(RectEdge::Right, 45_000);
+        assert_eq!(
+            project.validate_panel_bevel(id, curved),
+            Err(ProjectError::Panel(PanelError::CurvedBevel { on: curved.source() }))
+        );
+
+        assert_eq!(project.panel(id).expect("panel").bevels(), &[left]);
+        let next = revision.checked_next().expect("revision");
+        assert_eq!(project.revision(), next.checked_next().and_then(|two| two.checked_next()).expect("three"));
+    }
+
+    #[test]
+    fn a_ring_segment_takes_a_bevel_and_an_arc_is_refused() {
+        let panel_id = Id::new(5).expect("id");
+        let ring = rounded_ring();
+        let panel = Panel::new_contour(panel_id, "Rounded", ring, None, sample_thickness(), Placement::IDENTITY)
+            .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+
+        let line = EdgeRef::Ring { segment: segment_id(1) };
+        let turn = EdgeBevel::new(line, furnicraft_units::Degrees::from_millidegrees(20_000)).expect("a bevel");
+        project.set_panel_bevel(panel_id, turn).expect("bevel a straight ring segment");
+        assert_eq!(project.panel(panel_id).expect("panel").bevel_at(line), Some(turn));
+
+        // The quarter arc's end face is a ruled surface, not a plane, so it is refused.
+        let arc = EdgeRef::Ring { segment: segment_id(2) };
+        let curved = EdgeBevel::new(arc, furnicraft_units::Degrees::from_millidegrees(20_000)).expect("a bevel");
+        assert_eq!(
+            project.validate_panel_bevel(panel_id, curved),
+            Err(ProjectError::Panel(PanelError::CurvedBevel { on: arc }))
+        );
+        let missing = EdgeRef::Ring { segment: segment_id(9) };
+        let ghost = EdgeBevel::new(missing, furnicraft_units::Degrees::from_millidegrees(20_000)).expect("a bevel");
+        assert_eq!(
+            project.validate_panel_bevel(panel_id, ghost),
+            Err(ProjectError::Panel(PanelError::UnsupportedBevel { on: missing }))
+        );
+    }
+
+    #[test]
+    fn a_resize_that_the_bevel_would_empty_is_refused() {
+        let mut project = sample_project();
+        let id = small_panel(&mut project);
+        project.set_panel_bevel(id, bevel(RectEdge::Right, 45_000)).expect("bevel the right edge");
+        let narrow = PanelNominalSize::new(millimetres(10), millimetres(50)).expect("a narrow panel");
+        assert_eq!(project.validate_panel_resize(id, narrow), Err(ProjectError::BevelRemovesBody { panel: id }));
+        assert_eq!(
+            project.panel(id).expect("panel").nominal_size(),
+            PanelNominalSize::new(millimetres(100), millimetres(50)).expect("the size did not move")
+        );
+    }
+
+    #[test]
+    fn baking_a_rectangle_moves_its_bevels_onto_ring_segments() {
+        let mut project = sample_project();
+        let id = small_panel(&mut project);
+        let right = bevel(RectEdge::Right, 45_000);
+        project.set_panel_bevel(id, right).expect("bevel the right edge");
+        project.convert_panel_to_contour(id).expect("bake the outline");
+
+        let panel = project.panel(id).expect("panel");
+        let ring = panel.outline_contour().expect("the outline is a ring");
+        assert_eq!(panel.bevels().len(), 1, "the bevel survived the bake");
+        let moved = panel.bevels().first().copied().expect("the moved bevel");
+        assert_eq!(moved.angle(), right.angle(), "the angle is untouched");
+        let EdgeRef::Ring { segment } = moved.source() else {
+            panic!("a baked bevel names a ring segment, not a rectangle edge");
+        };
+        assert!(ring.segment(segment).is_some(), "the bevel names a segment the ring has");
+        panel
+            .bevel_violation(panel.nominal_size(), &panel.geometry_with_fallbacks().expect("geometry"))
+            .expect("the baked body holds");
     }
 }

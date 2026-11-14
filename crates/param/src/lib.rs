@@ -29,8 +29,8 @@
 use furnicraft_geom::{ContourError, DVec2, DVec3, Frame, RegionError, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, MachiningId,
-    MachiningStage, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
+    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeBevel, EdgeId, EdgeRef, FaceSide,
+    MachiningId, MachiningStage, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -97,6 +97,18 @@ pub enum ParamError {
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
+    /// A bevel names an outline segment that is not a straight line.
+    #[error("the bevel on {on} has no straight segment to tilt an end face about")]
+    BevelNotStraight {
+        /// The outline edge the bevel names.
+        on: EdgeRef,
+    },
+    /// A bevel's setback does not fit a length.
+    #[error("the bevel on {on} is too steep for the panel thickness")]
+    BevelTooSteep {
+        /// The outline edge the bevel names.
+        on: EdgeRef,
+    },
     /// The contour samples to more points than one extrusion cap can hold.
     #[error(
         "the contour samples to {points} points but one extrusion cap holds at most {max}; use fewer or wider arcs"
@@ -655,6 +667,65 @@ where
 }
 
 /// The plan of one cutout tool, in nominal panel-local coordinates.
+/// Builds the wedge one end bevel removes from the panel body.
+///
+/// The outline is the edge on face `B` (`z = 0`), so the cutter is the section between the outline
+/// edge and the edge face `A` keeps: `0 <= u <= z * tan(angle)` across the edge, over the whole
+/// thickness. Its frame puts local X across the panel towards the middle, local Y along the
+/// thickness and local Z along the segment, so subtracting it from the extruded core leaves the
+/// tilted end face. The only cutter face inside the body is the tilted plane itself: the profile is
+/// closed outside the panel on the other three sides, so no cutter face is coplanar with a panel
+/// face (which is what makes a coincident-face boolean unreliable), and the extrusion runs past both
+/// segment ends by the tool overshoot.
+pub(crate) fn build_bevel_tool(
+    panel: &Panel,
+    bevel: EdgeBevel,
+    geometry: &PanelGeometry,
+) -> Result<SolidPlan, ParamError> {
+    let on = bevel.source();
+    let thickness = geometry.thickness().millimetres_f64();
+    let setback = bevel.setback(geometry.thickness()).ok_or(ParamError::BevelTooSteep { on })?.millimetres_f64();
+    if thickness <= 0.0 || setback <= 0.0 || !thickness.is_finite() || !setback.is_finite() {
+        return Err(ParamError::BevelTooSteep { on });
+    }
+    let want = match on {
+        EdgeRef::Rect { edge } => SegmentSource::Edge(edge),
+        EdgeRef::Ring { segment } => SegmentSource::Ring(segment),
+    };
+    let segments = panel.nominal_segments()?;
+    let Some((segment, _)) = segments.iter().find(|(_, source)| *source == want) else {
+        return Err(ParamError::BevelNotStraight { on });
+    };
+    let Segment::Line(line) = *segment else {
+        return Err(ParamError::BevelNotStraight { on });
+    };
+    let (start, end) = (line.start(), line.end());
+    let length = (end - start).length();
+    if !length.is_finite() || length <= 0.0 {
+        return Err(ParamError::BevelNotStraight { on });
+    }
+    let direction = line.direction();
+    let inward = line.left_normal();
+    let origin = DVec3::new(start.x, start.y, 0.0) - DVec3::new(direction.x, direction.y, 0.0) * TOOL_OVERSHOOT_MM;
+    let frame = Frame::from_origin_axes(origin, DVec3::new(inward.x, inward.y, 0.0), DVec3::Z)
+        .ok_or(ParamError::BevelNotStraight { on })?;
+
+    // The tilted edge runs from the outline at `(0, 0)` to `(setback, thickness)`. A plane exactly
+    // through the outline edge is tangent to the panel's own edge there, and the kernel's boolean
+    // answers such a cut with nothing, so the plane is offset one micrometre outside the material:
+    // face `B` keeps its exact outline and the end face is off by less than the document's own
+    // resolution. Every other profile edge lies outside the panel.
+    let slope = setback / thickness;
+    let over = TOOL_OVERSHOOT_MM;
+    let offset = -over;
+    let foot = DVec2::new(offset - over * slope, -over);
+    let crest = DVec2::new(offset + setback + over * slope, thickness + over);
+    let far = -(setback + thickness) - 1.0;
+    let points = vec![foot, crest, DVec2::new(far, thickness + over), DVec2::new(far, -over)];
+    let profile = Profile::new(points, Vec::new())?;
+    extrusion_plan(profile, frame, length + 2.0 * TOOL_OVERSHOOT_MM)
+}
+
 pub(crate) fn build_cutout_tool(
     geometry: &PanelGeometry,
     cutout: &Cutout,

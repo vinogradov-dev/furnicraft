@@ -342,6 +342,36 @@ pub enum ProjectError {
         /// The edge that was requested.
         edge: EdgeId,
     },
+    /// The requested outline edge has no bevel to clear.
+    #[error("panel {panel} has no bevel on {on}")]
+    BevelNotFound {
+        /// The panel that owns the bevel.
+        panel: Id,
+        /// The outline edge that was requested.
+        on: EdgeRef,
+    },
+    /// A bevel on an edge that already carries a band.
+    #[error("panel {panel} cannot bevel {on}: the edge is banded and the band would follow the nominal edge")]
+    BevelOnBandedEdge {
+        /// The panel that owns both records.
+        panel: Id,
+        /// The outline edge that is banded.
+        on: EdgeRef,
+    },
+    /// A band on an edge that is already beveled.
+    #[error("panel {panel} cannot band {on}: the edge is beveled, so the band has no square face to cover")]
+    BandOnBeveledEdge {
+        /// The panel that owns both records.
+        panel: Id,
+        /// The outline edge that is beveled.
+        on: EdgeRef,
+    },
+    /// The bevels leave no material at the far face of the panel.
+    #[error("bevels on panel {panel} would remove the far face; reduce the angle")]
+    BevelRemovesBody {
+        /// The panel whose body the bevels would consume.
+        panel: Id,
+    },
     /// A through cutout does not reach the core, or a blind cutout is not fully inside it.
     #[error("cutout on panel {panel} lies outside the core")]
     CutoutOutsidePanel {

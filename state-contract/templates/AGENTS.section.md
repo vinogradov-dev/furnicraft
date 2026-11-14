@@ -34,6 +34,9 @@ case that applies.
    a broken plan is never a reason to edit `plan/` by hand. Stop only when the tool cannot do it.
 4. **Only then** answer from `STATE` and `## Now`: the current task, its `files:`, and the one after
    it. Short.
+5. **An empty order.** `task=-` and `## Next` says nothing is scheduled: say so and name what waits
+   in `## Next` — do not invent a task, and do not take one into the order without being asked.
+   `{{TASK_COMMAND}} take <id> --at top` puts one back.
 
 Success looks like this: the answer needs no code read, no history and no diff, and an interrupted
 session continues from `now:` instead of starting from zero.

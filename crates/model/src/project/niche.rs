@@ -1,4 +1,4 @@
-//! The niche probe: how far the free space around a point reaches, and what shape it has.
+//! The niche probe: the free space around a point, as the cell its walls bound.
 //!
 //! A niche is the space a piece of furniture reserves (ADR 0099); it is derived from the document
 //! every time it is asked for and never stored (ADR 0102, ADR 0103). Two questions answer it:
@@ -6,19 +6,21 @@
 //! - [`Project::probe`] casts one ray from a point and reports the face it stops at — its distance,
 //!   its plane and the furniture entity that owns it: a panel face, a geometry body, another
 //!   product's shell, or a virtual face of the envelope of the piece the point sits in;
-//! - [`Project::niche`] casts six rays along a product's own axes, builds the cross-section of the
-//!   free space in the product's own XY plane, and extrudes it along the product's height. A
-//!   rectangular case gives the rectangle; two posts standing at an angle give a trapezoid, which a
-//!   shelf can take as its outline (ADR 0099).
+//! - [`Project::niche`] builds the free space around the point as a convex cell: the product's six
+//!   envelope planes, clipped by the plane of every face a probe meets, then probed again from the
+//!   cell's own corners until a round adds no plane. The cell answers the box the callouts draw,
+//!   the supporting planes and corners a tool measures against, and the section a board of a given
+//!   thickness takes ([`Niche::cut`]).
+//!
+//! The cell is why a board turned in space is measured at all: a leaned back wall, a ceiling that
+//! comes down towards the back, a piece turned off the world axes (ADR 0106). The cell is built in
+//! the product's own frame, so a turned product is measured like any other. A void that is not
+//! convex — one holding something the cell would swallow — is refused with a reason the tool can
+//! report rather than approximated.
 //!
 //! Both are pure queries: no session, no renderer, no document write. The surfaces are the same
 //! boxes the furniture move rule measures against (`super::surface`), so the tool that fills a
 //! niche and the tool that drags a piece cannot disagree about where a surface is.
-//!
-//! A product turned off the world axes has no world-box answer, so [`Project::niche`] refuses it
-//! instead of returning a loose box. A free section that is not one straight extruded polygon —
-//! a wall that stops halfway, a shape with a notch — is refused as well, with a reason the tool can
-//! report rather than approximate.
 
 use furnicraft_geom::{DVec2, DVec3, Region};
 
@@ -26,29 +28,41 @@ use super::surface::{FaceHit, SurfaceBox, SurfaceKind, surface_box};
 use crate::tree::object_bounds_mm;
 use crate::*;
 
-/// Tolerance for deciding that a product's axes lie on the world axes.
-const AXIS_ALIGNMENT: f64 = 1.0e-9;
-
 /// Tolerance for a measurement that is already a whole micrometre, in millimetres.
 const SECTION_TOLERANCE: f64 = 1.0e-6;
 
-/// Smallest share of a face normal that must lie in the section plane for it to bound a wall.
+/// Smallest share of a plane's normal that must lie in the plane it is cut with.
 ///
-/// A face almost level with the plane answers a line far outside the void, so it is refused rather
-/// than allowed to produce a corner at a huge coordinate.
+/// A plane almost level with the cut answers a line far outside the void, so it is left to the
+/// constant test instead of producing a corner at a huge coordinate.
 const SECTION_NORMAL: f64 = 1.0e-3;
 
-/// Smallest sine of the angle between two section walls that still meets in a corner.
+/// Smallest sine of the angle between two planes that still meet in a corner or a line.
 const SECTION_ANGLE: f64 = 1.0e-6;
 
-/// How far inside the void a wall's coverage is tested, in millimetres.
-const COVER_INSET: f64 = 1.0e-3;
+/// Cosine above which two plane normals count as the same direction.
+const PLANE_PARALLEL: f64 = 1.0 - 1.0e-6;
 
-/// Tolerance for comparing a section corner with a face, in millimetres.
+/// Cosine above which a plane's normal counts as level with an axis.
+const NORMAL_LEVEL: f64 = 1.0e-6;
+
+/// Tolerance for comparing a cell corner with a plane, a face or a box, in millimetres.
 ///
 /// The probes report whole micrometres, so a corner where two walls meet can land a micrometre
 /// outside the face that owns one of them: that is rounding, not a gap.
 const COORDINATE_TOLERANCE: f64 = 2.0e-3;
+
+/// The rounds one cell build may run before it refuses to spin.
+const MAX_CELL_ROUNDS: usize = 6;
+
+/// The supporting planes one cell may carry.
+const MAX_CELL_PLANES: usize = 16;
+
+/// The directions one round may probe.
+const MAX_CELL_PROBES: usize = 64;
+
+/// The corners one cell or one cut may have.
+const MAX_CELL_CORNERS: usize = 64;
 
 /// What one probe stopped at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +81,7 @@ pub struct ProbeFace {
     /// The face's unit normal, pointing back along the ray.
     ///
     /// The free space therefore lies in the half-space `normal · (point - hit) >= 0`, which is what
-    /// lets a section be built from probed faces.
+    /// lets a cell be built from probed faces.
     pub normal: DVec3,
 }
 
@@ -82,17 +96,44 @@ pub struct Probe {
     pub face: ProbeFace,
 }
 
+/// One supporting plane of a niche's free space, in the product's own frame.
+///
+/// The free space lies in the half-space `normal · point >= offset`: the normal points into the
+/// void and the offset is in millimetres, so every point of the cell satisfies every plane of
+/// [`Niche::planes`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NichePlane {
+    /// The plane's unit normal, pointing into the free space.
+    pub normal: DVec3,
+    /// The plane's offset along that normal, in millimetres.
+    pub offset: f64,
+}
+
+impl NichePlane {
+    /// The signed distance from `point` to this plane, positive on the free side.
+    fn distance_to(self, point: DVec3) -> f64 {
+        self.normal.dot(point) - self.offset
+    }
+}
+
 /// The shape of a niche.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NicheShape {
-    /// The free section is the rectangle the four side probes enclose.
+    /// The free space is exactly the box its corners span.
     Box,
-    /// The free section is a polygon, stored as a ring in the product's own XY plane.
+    /// The free space is one section from its floor to its ceiling, stored as a ring in the
+    /// product's own XY plane.
     ///
     /// The ring is the outline a part lying in that plane takes: a shelf in a case whose posts stand
     /// at an angle is a trapezoid, not the rectangle around it (ADR 0099). Its coordinates are the
     /// product frame's, in the document's micrometres.
     Section(Contour),
+    /// The free space is a cell whose section changes along the product's height.
+    ///
+    /// A ceiling that comes down towards the back, a wall leaned across the section: one ring would
+    /// be false somewhere in the void, so the planes and corners answer instead, and a board takes
+    /// the cut it needs ([`Niche::cut`]).
+    Sloped,
 }
 
 /// Why a point has no usable niche.
@@ -100,9 +141,8 @@ pub enum NicheShape {
 pub enum NicheRefusal {
     /// The point is outside every product, or is not a usable number.
     Outside,
-    /// The product is turned off the world axes, so its own box is not a world box.
-    Turned,
-    /// The free space around the point is not one straight extruded polygon.
+    /// The free space around the point is not one convex cell: it holds something, or a wall does
+    /// not reach the whole face the cell would need.
     Unrepresentable,
 }
 
@@ -111,7 +151,8 @@ pub enum NicheRefusal {
 /// Everything here is derived: the query stores nothing in the document. `local_min` and `size` are
 /// the box the free space occupies, in the product's own frame, which is the frame a panel is placed
 /// in; `min` is the same corner in world millimetres, so a tool never re-derives a position from a
-/// cursor and a size. `shape` carries the exact section when it is not that box.
+/// cursor and a size. `planes` and `corners` are the exact cell, and `shape` names the case a board
+/// reads directly.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Niche {
     /// The product whose void was measured.
@@ -124,6 +165,13 @@ pub struct Niche {
     pub min: DVec3,
     /// The shape of the free space.
     pub shape: NicheShape,
+    /// The cell's supporting planes, in the product's own frame.
+    ///
+    /// Together with [`Niche::corners`] this is the exact free space: every plane's free half-space,
+    /// intersected.
+    pub planes: Vec<NichePlane>,
+    /// The cell's corners, in the product's own frame and whole micrometres.
+    pub corners: Vec<DVec3>,
 }
 
 impl Niche {
@@ -141,34 +189,179 @@ impl Niche {
         }
     }
 
-    /// The free section's polygon, when the niche is not a plain box.
+    /// The free section's polygon, when the free space is one section from floor to ceiling.
     ///
     /// The ring is in the product's own XY plane, the plane a shelf's outline lies in.
     pub fn section(&self) -> Option<&Contour> {
         match &self.shape {
             NicheShape::Section(ring) => Some(ring),
-            NicheShape::Box => None,
+            NicheShape::Box | NicheShape::Sloped => None,
         }
+    }
+
+    /// The free space a board of the given thickness takes, as a convex polygon.
+    ///
+    /// The cell is cut by the slab between `low` and `high` along the product's `axis` and the cut is
+    /// projected on the two other axes, in `(u, v)` order: a shelf asks for `axis = 2` and
+    /// `(u, v) = (0, 1)`, a board standing across the void for `axis = 0` and `(u, v) = (2, 1)`.
+    /// Every plane's half-space is evaluated at the slab's own two ends, so a wall that leans across
+    /// the slab limits the part at the face that would cut into it.
+    ///
+    /// The points are whole micrometres in the product's frame, running counter-clockwise in
+    /// `(u, v)`. A slab that leaves no area — outside the void, or thinner than the gap the walls
+    /// leave — answers `None`, as does an impossible axis order.
+    pub fn cut(&self, axis: usize, (low, high): (f64, f64), (u, v): (usize, usize)) -> Option<Vec<DVec2>> {
+        if !low.is_finite() || !high.is_finite() {
+            return None;
+        }
+        let polygon = cut_planes(&self.planes, axis, low, high, u, v)?;
+        Some(polygon.into_iter().map(quantised_point).collect())
     }
 }
 
-/// One wall of a niche section: a line in the product's own plane and the surface that owns it.
-#[derive(Clone, Copy, Debug)]
-struct Wall {
-    /// A point on the line, in the product frame's millimetres.
-    point: DVec2,
-    /// The line's unit normal, pointing into the free space.
-    normal: DVec2,
-    /// The surface the probe met, for the extent checks.
-    surface: SurfaceBox,
-    /// The surface's own axis the face lies on.
-    axis: usize,
+/// The surfaces one point is measured against.
+struct Surroundings {
+    /// The innermost envelope the point sits in, measured as an envelope rather than a shell.
+    own: Option<(Id, SurfaceBox)>,
+    /// Every other surface a ray can stop at: the bodies and the other products' shells.
+    surfaces: Vec<SurfaceBox>,
 }
 
-impl Wall {
-    /// The signed distance from a point in the product plane to this wall, positive on the free side.
-    fn distance_to(self, point: DVec2) -> f64 {
-        self.normal.dot(point - self.point)
+/// The free space around a point, as the convex cell its supporting planes bound.
+///
+/// The corners are always derived from the planes, so a plane and the cell it cuts cannot disagree.
+#[derive(Clone, Debug)]
+struct Cell {
+    planes: Vec<NichePlane>,
+    /// The corners, sorted by their coordinates so the same cell always reports the same list.
+    corners: Vec<DVec3>,
+}
+
+impl Cell {
+    /// The cell inside a product's envelope: its six planes, before any part is met.
+    fn envelope(size: DVec3) -> Self {
+        let planes = vec![
+            NichePlane { normal: DVec3::X, offset: 0.0 },
+            NichePlane { normal: DVec3::NEG_X, offset: -size.x },
+            NichePlane { normal: DVec3::Y, offset: 0.0 },
+            NichePlane { normal: DVec3::NEG_Y, offset: -size.y },
+            NichePlane { normal: DVec3::Z, offset: 0.0 },
+            NichePlane { normal: DVec3::NEG_Z, offset: -size.z },
+        ];
+        let mut cell = Self { planes, corners: Vec::new() };
+        cell.rebuild();
+        cell
+    }
+
+    /// Rebuilds the corners from the planes, answering whether the planes bound a usable cell.
+    ///
+    /// Every triple of planes that meets inside all of them is a corner: a convex cell is the
+    /// intersection of its planes, and it needs at least four corners to enclose anything.
+    fn rebuild(&mut self) -> bool {
+        let mut corners: Vec<DVec3> = Vec::new();
+        for (index, first) in self.planes.iter().enumerate() {
+            for (second_index, second) in self.planes.iter().enumerate().skip(index.saturating_add(1)) {
+                for third in self.planes.iter().skip(second_index.saturating_add(1)) {
+                    let Some(point) = corner_of(first, second, third) else {
+                        continue;
+                    };
+                    if self.planes.iter().any(|plane| plane.distance_to(point) < -COORDINATE_TOLERANCE) {
+                        continue;
+                    }
+                    if corners.iter().any(|seen| (*seen - point).length() <= COORDINATE_TOLERANCE) {
+                        continue;
+                    }
+                    corners.push(point);
+                }
+            }
+        }
+        if corners.len() < 4 || corners.len() > MAX_CELL_CORNERS {
+            self.corners.clear();
+            return false;
+        }
+        corners.sort_by(corner_order);
+        self.corners = corners;
+        true
+    }
+
+    /// Whether the point lies in every plane, allowing the micrometre the corners are stored in.
+    fn contains(&self, point: DVec3) -> bool {
+        self.corners.len() >= 4 && self.planes.iter().all(|plane| plane.distance_to(point) >= -COORDINATE_TOLERANCE)
+    }
+
+    /// Whether the cell is one section from its floor to its ceiling, so one ring describes it.
+    ///
+    /// A cell whose planes are all either flat or upright is the section between two heights; one
+    /// whose plane leans across both is not.
+    fn is_prism(&self) -> bool {
+        self.planes.iter().all(|plane| {
+            let normal = plane.normal;
+            let flat = normal.x.abs() <= NORMAL_LEVEL && normal.y.abs() <= NORMAL_LEVEL;
+            let upright = normal.z.abs() <= NORMAL_LEVEL;
+            flat || upright
+        })
+    }
+
+    /// Whether `plane` removes any part of the cell; a plane the cell already lies on changes nothing.
+    fn cuts(&self, plane: NichePlane) -> bool {
+        let known = self.planes.iter().any(|existing| {
+            existing.normal.dot(plane.normal) >= PLANE_PARALLEL
+                && (existing.offset - plane.offset).abs() <= COORDINATE_TOLERANCE
+        });
+        if known {
+            return false;
+        }
+        self.corners.iter().any(|corner| plane.distance_to(*corner) < -COORDINATE_TOLERANCE)
+    }
+
+    /// The cell cut by one more plane, or `None` when the cut leaves no cell or one plane too many.
+    fn clipped(&self, plane: NichePlane) -> Option<Self> {
+        if self.planes.len() >= MAX_CELL_PLANES {
+            return None;
+        }
+        let mut cut = self.clone();
+        cut.planes.push(plane);
+        cut.rebuild().then_some(cut)
+    }
+
+    /// The directions the next round probes from `point` in the product's frame.
+    ///
+    /// Each face normal finds the wall behind it and each corner finds whatever cuts the corner off.
+    /// The first round also probes the envelope's twenty-six axis, edge and corner directions, so a
+    /// wall standing between two cell corners is met before any corner exists to point at it.
+    fn directions(&self, point: DVec3, first: bool) -> Vec<DVec3> {
+        let mut directions: Vec<DVec3> = Vec::new();
+        let mut add = |direction: DVec3| {
+            let Some(unit) = direction.try_normalize() else {
+                return;
+            };
+            if directions.len() >= MAX_CELL_PROBES {
+                return;
+            }
+            if directions.iter().any(|seen| (*seen - unit).length() <= SECTION_ANGLE) {
+                return;
+            }
+            directions.push(unit);
+        };
+        for plane in &self.planes {
+            add(plane.normal);
+        }
+        for corner in &self.corners {
+            add(*corner - point);
+        }
+        if first {
+            for x in -1..=1 {
+                for y in -1..=1 {
+                    for z in -1..=1 {
+                        let direction = DVec3::new(x as f64, y as f64, z as f64);
+                        if direction.length_squared() > 0.0 {
+                            add(direction);
+                        }
+                    }
+                }
+            }
+        }
+        directions
     }
 }
 
@@ -181,7 +374,95 @@ impl Project {
     /// micrometre. A point that is not finite, a direction that is zero or not finite, and a ray
     /// that meets nothing all answer `None`.
     pub fn probe(&self, point: DVec3, direction: DVec3) -> Option<Probe> {
-        let (unit, surface, face) = self.first_face(point, direction)?;
+        let surroundings = self.surroundings_around(point);
+        self.probe_within(point, direction, &surroundings)
+    }
+
+    /// The empty space around `point`, as the convex cell its walls bound.
+    ///
+    /// The product is the innermost envelope that contains the point, and the cell is built in that
+    /// product's own frame: the envelope's six planes, clipped by the plane of every face a probe
+    /// meets, probed again from the cell's own corners until a round adds no plane. A rectangular
+    /// case answers [`NicheShape::Box`]; a case with splayed posts answers the trapezoid as
+    /// [`NicheShape::Section`]; a leaned wall or ceiling answers [`NicheShape::Sloped`] with the cell
+    /// itself. A point outside every product is refused, and so is a void that holds a surface the
+    /// cell did not cut against (ADR 0099, ADR 0106, ADR 0109). A wall bounds the void where its face
+    /// stands, not only when it covers a whole face of the envelope: an open front under a short top
+    /// still answers.
+    pub fn niche(&self, point: DVec3) -> Result<Niche, NicheRefusal> {
+        if !point.is_finite() {
+            return Err(NicheRefusal::Outside);
+        }
+        let (product, envelope) = self.product_containing(point).ok_or(NicheRefusal::Outside)?;
+        let placement = self.world_placement(product).ok_or(NicheRefusal::Outside)?;
+        let inverse = placement.inverse().map_err(|_| NicheRefusal::Outside)?;
+        let local = inverse.transform_point(point);
+        if !local.is_finite() || !within_box(local, envelope.local_min, envelope.local_max) {
+            return Err(NicheRefusal::Outside);
+        }
+        let surroundings = self.surroundings_around(point);
+        let mut cell = Cell::envelope(envelope.local_max - envelope.local_min);
+        let mut settled = false;
+        for round in 0..MAX_CELL_ROUNDS {
+            let mut added = false;
+            for direction in cell.directions(local, round == 0) {
+                let world = placement.transform_vector(direction);
+                let Some(probe) = self.probe_within(point, world, &surroundings) else {
+                    continue;
+                };
+                let Some(plane) = plane_of(probe.face, inverse) else {
+                    continue;
+                };
+                if !cell.cuts(plane) {
+                    continue;
+                }
+                let Some(cut) = cell.clipped(plane) else {
+                    return Err(NicheRefusal::Unrepresentable);
+                };
+                cell = cut;
+                added = true;
+            }
+            if !added {
+                settled = true;
+                break;
+            }
+        }
+        if !settled || !cell.contains(local) || self.holds_body(&cell, &surroundings, inverse) {
+            return Err(NicheRefusal::Unrepresentable);
+        }
+        let corners: Vec<DVec3> = cell.corners.iter().copied().map(quantised_corner).collect();
+        let Some(first) = corners.first().copied() else {
+            return Err(NicheRefusal::Unrepresentable);
+        };
+        let low = corners.iter().copied().fold(first, DVec3::min);
+        let high = corners.iter().copied().fold(first, DVec3::max);
+        let size = high - low;
+        let world_min = placement.transform_point(low);
+        if !(size.is_finite() && size.min_element() > 0.0) || !world_min.is_finite() {
+            return Err(NicheRefusal::Unrepresentable);
+        }
+        let shape = cell_shape(&cell, &corners, low, high)?;
+        Ok(Niche { product, local_min: low, size, min: world_min, shape, planes: cell.planes, corners })
+    }
+
+    /// Whether a surface the cell did not cut against stands inside it.
+    ///
+    /// A body or another product's shell inside the cell makes the free space non-convex: a board cut
+    /// to the cell would cut into it, so the void is refused until the query can answer several
+    /// cells. Only a corner strictly inside counts, so the wall that bounded the cell — its own
+    /// corners lie on the boundary — is not mistaken for an obstacle.
+    fn holds_body(&self, cell: &Cell, surroundings: &Surroundings, inverse: Placement) -> bool {
+        surroundings.surfaces.iter().any(|surface| {
+            surface_corners(*surface).into_iter().any(|corner| {
+                let local = inverse.transform_point(corner);
+                local.is_finite() && cell.planes.iter().all(|plane| plane.distance_to(local) > COORDINATE_TOLERANCE)
+            })
+        })
+    }
+
+    /// The distance to the first furniture face along `direction`, against known surroundings.
+    fn probe_within(&self, point: DVec3, direction: DVec3, surroundings: &Surroundings) -> Option<Probe> {
+        let (unit, surface, face) = self.first_face(point, direction, surroundings)?;
         let distance = quantised(face.distance);
         let hit_point = point + unit * distance;
         if !hit_point.is_finite() {
@@ -192,191 +473,6 @@ impl Project {
             hit: ProbeHit { id: surface.id, kind: surface.kind },
             face: ProbeFace { point: hit_point, normal: face.normal },
         })
-    }
-
-    /// The empty space around `point`, as one extruded polygon.
-    ///
-    /// The product is the innermost envelope that contains the point, and the section is taken in
-    /// that product's own XY plane: four rays along its own axes stop at the walls, the wall planes
-    /// bound the polygon, and the void's floor and ceiling come from the two vertical probes. A
-    /// rectangular case answers [`NicheShape::Box`]; a slanted wall answers the polygon it forms.
-    /// A point outside every product, a turned product and a section that is not one straight
-    /// polygon are refused rather than approximated (ADR 0099).
-    pub fn niche(&self, point: DVec3) -> Result<Niche, NicheRefusal> {
-        if !point.is_finite() {
-            return Err(NicheRefusal::Outside);
-        }
-        let (product, _) = self.product_containing(point).ok_or(NicheRefusal::Outside)?;
-        let placement = self.world_placement(product).ok_or(NicheRefusal::Outside)?;
-        if !axis_aligned(placement) {
-            return Err(NicheRefusal::Turned);
-        }
-        let inverse = placement.inverse().map_err(|_| NicheRefusal::Outside)?;
-        let local = inverse.transform_point(point);
-        if !local.is_finite() {
-            return Err(NicheRefusal::Outside);
-        }
-
-        // The four walls of the section, in probe order: +X, -X, +Y, -Y.
-        let mut walls = [None; 4];
-        for (index, direction) in [DVec3::X, -DVec3::X, DVec3::Y, -DVec3::Y].into_iter().enumerate() {
-            walls[index] = self.wall(point, local, placement, inverse, direction);
-        }
-        let [Some(right), Some(left), Some(back), Some(front)] = walls else {
-            return Err(NicheRefusal::Unrepresentable);
-        };
-        let downward =
-            self.probe(point, -placement.transform_vector(DVec3::Z)).ok_or(NicheRefusal::Unrepresentable)?.distance_mm;
-        let upward =
-            self.probe(point, placement.transform_vector(DVec3::Z)).ok_or(NicheRefusal::Unrepresentable)?.distance_mm;
-        // The cursor rarely sits on a whole micrometre inside the product frame, so the two ends are
-        // rounded once here: the void's floor and ceiling are surfaces, not the point's arithmetic.
-        let floor = quantised(local.z - downward);
-        let ceiling = quantised(local.z + upward);
-        if !(floor.is_finite() && ceiling.is_finite()) || ceiling - floor <= SECTION_TOLERANCE {
-            return Err(NicheRefusal::Unrepresentable);
-        }
-        let corners = self
-            .section(local, placement, [right, left, back, front], floor, ceiling)
-            .ok_or(NicheRefusal::Unrepresentable)?;
-
-        let (mut low, mut high) = (corners[0], corners[0]);
-        for corner in corners {
-            low = low.min(corner);
-            high = high.max(corner);
-        }
-        let local_min = DVec3::new(low.x, low.y, floor);
-        let size = DVec3::new(high.x - low.x, high.y - low.y, ceiling - floor);
-        if !(size.is_finite() && size.min_element() > 0.0) {
-            return Err(NicheRefusal::Unrepresentable);
-        }
-        let world_min = placement.transform_point(local_min);
-        if !world_min.is_finite() {
-            return Err(NicheRefusal::Unrepresentable);
-        }
-        let boxed = [right, left, back, front];
-        let shape = if is_box(corners, local, boxed) {
-            NicheShape::Box
-        } else {
-            NicheShape::Section(ring(corners).ok_or(NicheRefusal::Unrepresentable)?)
-        };
-        Ok(Niche { product, local_min, size, min: world_min, shape })
-    }
-
-    /// Builds the section polygon from the four walls, or `None` when they do not bound one.
-    ///
-    /// The corners are the pairwise intersections in the order the walls face each other, so a
-    /// rectangular void gives its four corners and a splayed one gives the trapezoid. The polygon is
-    /// accepted only when every corner is on the free side of every wall, every edge lies inside the
-    /// face that stopped its probe, and each wall's plane is still a surface at the void's floor and
-    /// ceiling: that is what makes the free space one extruded shape and not an approximation of a
-    /// more complicated void.
-    fn section(
-        &self,
-        local: DVec3,
-        placement: Placement,
-        walls: [Wall; 4],
-        floor: f64,
-        ceiling: f64,
-    ) -> Option<[DVec2; 4]> {
-        let [right, left, back, front] = walls;
-        let mut corners = [
-            intersection(right, back)?,
-            intersection(back, left)?,
-            intersection(left, front)?,
-            intersection(front, right)?,
-        ];
-        for corner in corners {
-            if !corner.is_finite() || walls.iter().any(|wall| wall.distance_to(corner) < -COORDINATE_TOLERANCE) {
-                return None;
-            }
-        }
-        let ground = DVec2::new(local.x, local.y);
-        // The point may sit on a wall: the tool's cursor rests on the envelope's near face. It may
-        // not sit behind one, which would mean the probes and the polygon disagree.
-        if walls.iter().any(|wall| wall.distance_to(ground) < -COORDINATE_TOLERANCE) {
-            return None;
-        }
-        if signed_area(corners) <= SECTION_TOLERANCE {
-            return None;
-        }
-        // The edge from one corner to the next lies on the wall they both belong to: `back`, `left`,
-        // `front` and `right` in that order.
-        let edges = [(2usize, 0usize, 1usize), (1, 1, 2), (3, 2, 3), (0, 3, 0)];
-        for (wall_index, from, to) in edges {
-            let wall = walls.get(wall_index).copied()?;
-            let start = *corners.get(from)?;
-            let end = *corners.get(to)?;
-            for corner in [start, end] {
-                if !within_face(wall, placement, corner, local.z) {
-                    return None;
-                }
-            }
-            let midpoint = (start + end) * 0.5;
-            if !self.covered(wall, placement, midpoint, floor + COVER_INSET)
-                || !self.covered(wall, placement, midpoint, ceiling - COVER_INSET)
-            {
-                return None;
-            }
-        }
-        for corner in &mut corners {
-            *corner = quantised_point(*corner);
-        }
-        Some(corners)
-    }
-
-    /// Whether a wall's plane still holds a surface at `height`, at the section point `at`.
-    ///
-    /// A board that stops halfway leaves the plane behind it empty, so the free space is not one
-    /// extruded shape. A second surface on the same plane — the envelope a panel is flush with —
-    /// keeps it a wall, which is why the plane and not the surface is tested.
-    fn covered(&self, wall: Wall, placement: Placement, at: DVec2, height: f64) -> bool {
-        // The ray starts just inside the free space and looks at the wall, because a ray that starts
-        // on a face and points into the solid measures the far face, not the near one.
-        let point = placement.transform_point(DVec3::new(
-            at.x + wall.normal.x * COVER_INSET,
-            at.y + wall.normal.y * COVER_INSET,
-            height,
-        ));
-        let outward = -placement.transform_vector(DVec3::new(wall.normal.x, wall.normal.y, 0.0));
-        self.probe(point, outward).is_some_and(|probe| probe.distance_mm <= COVER_INSET * 1.5)
-    }
-
-    /// One wall of the section: where the ray along a product axis stops, as a line in the plane.
-    ///
-    /// The face plane is cut with the section plane through the measured point, so a face that is
-    /// itself tilted still answers the line the free space is bounded by.
-    fn wall(
-        &self,
-        point: DVec3,
-        local: DVec3,
-        placement: Placement,
-        inverse: Placement,
-        direction: DVec3,
-    ) -> Option<Wall> {
-        let (unit, surface, face) = self.first_face(point, placement.transform_vector(direction))?;
-        let hit = inverse.transform_point(point + unit * quantised(face.distance));
-        let normal = inverse.transform_vector(face.normal);
-        if !hit.is_finite() || !normal.is_finite() {
-            return None;
-        }
-        let flat = DVec2::new(normal.x, normal.y);
-        let length = flat.length();
-        if !length.is_finite() || length < SECTION_NORMAL {
-            // A face that is level with the section plane bounds no wall of it.
-            return None;
-        }
-        let unit = flat / length;
-        let ground = DVec2::new(local.x, local.y);
-        let on_face = DVec2::new(hit.x, hit.y);
-        // The face plane cut with the section plane through the measured point, written as a line
-        // with a unit normal: `unit · (XY - on_face) = offset`. A tilted face still answers a line.
-        let offset = -normal.z * (local.z - hit.z) / length;
-        let point = ground - unit * (unit.dot(ground - on_face) - offset);
-        if !point.is_finite() {
-            return None;
-        }
-        Some(Wall { point, normal: unit, surface, axis: face.axis })
     }
 
     /// The innermost product whose envelope contains `point`, with that envelope's world box.
@@ -402,7 +498,7 @@ impl Project {
     /// Panels and objects are bodies; a product's authored box is a shell. The innermost envelope is
     /// also returned so a probe can report it as an envelope face rather than as the shell of the
     /// piece it is standing in.
-    fn surfaces_around(&self, point: DVec3) -> (Option<(Id, SurfaceBox)>, Vec<SurfaceBox>) {
+    fn surroundings_around(&self, point: DVec3) -> Surroundings {
         let mut surfaces = Vec::new();
         for product in self.products() {
             if let Some(envelope) = self.envelope_surface(product) {
@@ -415,7 +511,7 @@ impl Project {
         // the list would let a tie choose the shell and report the wrong kind.
         let own_id = own.map(|(product, _)| product);
         surfaces.retain(|surface| Some(surface.id) != own_id);
-        (own, surfaces)
+        Surroundings { own, surfaces }
     }
 
     /// The world box of a product's authored envelope, as a shell surface.
@@ -461,7 +557,12 @@ impl Project {
     }
 
     /// The first surface and face a normalized ray meets.
-    fn first_face(&self, point: DVec3, direction: DVec3) -> Option<(DVec3, SurfaceBox, FaceHit)> {
+    fn first_face(
+        &self,
+        point: DVec3,
+        direction: DVec3,
+        surroundings: &Surroundings,
+    ) -> Option<(DVec3, SurfaceBox, FaceHit)> {
         if !point.is_finite() || !direction.is_finite() {
             return None;
         }
@@ -470,7 +571,7 @@ impl Project {
             return None;
         }
         let unit = direction / length;
-        let (own, surfaces) = self.surfaces_around(point);
+        let own = surroundings.own;
         let mut best: Option<(SurfaceBox, FaceHit)> = None;
         if let Some((_, envelope)) = own
             && let Some(face) = envelope.face_hit(point, unit)
@@ -478,7 +579,7 @@ impl Project {
             let envelope = SurfaceBox { kind: SurfaceKind::Envelope, ..envelope };
             best = Some((envelope, face));
         }
-        for surface in surfaces {
+        for surface in &surroundings.surfaces {
             if own.is_some_and(|(product, _)| product == surface.id) {
                 continue;
             }
@@ -486,67 +587,154 @@ impl Project {
                 continue;
             };
             if best.is_none_or(|(_, nearest)| face.distance < nearest.distance) {
-                best = Some((surface, face));
+                best = Some((*surface, face));
             }
         }
         best.map(|(surface, face)| (unit, surface, face))
     }
 }
 
-/// Whether every corner of `corners` is the box corner the four probe distances describe.
-fn is_box(corners: [DVec2; 4], local: DVec3, walls: [Wall; 4]) -> bool {
-    let ground = DVec2::new(local.x, local.y);
-    let [right, left, back, front] = walls;
-    let low = DVec2::new(ground.x - left.distance_to(ground), ground.y - front.distance_to(ground));
-    let high = DVec2::new(ground.x + right.distance_to(ground), ground.y + back.distance_to(ground));
-    let expected = [high, DVec2::new(low.x, high.y), low, DVec2::new(high.x, low.y)];
-    corners.iter().zip(expected).all(|(corner, box_corner)| {
-        (corner.x - box_corner.x).abs() <= COORDINATE_TOLERANCE
-            && (corner.y - box_corner.y).abs() <= COORDINATE_TOLERANCE
-    })
-}
-
-/// The section corners as the document ring a panel stores as its outline.
+/// The eight true corners of a surface box, in world millimetres.
 ///
-/// The polygon is measured as a geometry region first — a degenerate or self-crossing section is
-/// refused there — and the document ring is built from the same corners, rounded to the micrometre.
-fn ring(corners: [DVec2; 4]) -> Option<Contour> {
-    Region::from_loops(corners.to_vec(), Vec::new()).ok()?;
-    let points = corners.into_iter().map(document_point).collect::<Option<Vec<_>>>()?;
-    Contour::from_polygon(points).ok()
-}
-
-/// One point of the section as the document's micrometres.
-fn document_point(point: DVec2) -> Option<[Length; 2]> {
-    let micrometres = |value: f64| -> Option<i64> {
-        let rounded = (value * 1000.0).round();
-        if !rounded.is_finite() || rounded.abs() > i64::MAX as f64 {
-            return None;
+/// The corners are the board's own, not the world box around a turned board: a slanted wall meets the
+/// cell on its face, and the loose box around it would reach across the boundary.
+fn surface_corners(surface: SurfaceBox) -> Vec<DVec3> {
+    let mut corners = Vec::with_capacity(8);
+    for x in [surface.local_min.x, surface.local_max.x] {
+        for y in [surface.local_min.y, surface.local_max.y] {
+            for z in [surface.local_min.z, surface.local_max.z] {
+                corners.push(surface.world.transform_point(DVec3::new(x, y, z)));
+            }
         }
-        Some(rounded as i64)
-    };
-    Some([Length::from_micrometres(micrometres(point.x)?), Length::from_micrometres(micrometres(point.y)?)])
+    }
+    corners
 }
 
-/// Where two wall lines meet, or `None` when they are parallel.
-fn intersection(first: Wall, second: Wall) -> Option<DVec2> {
-    let determinant = first.normal.x * second.normal.y - first.normal.y * second.normal.x;
+/// The shape a cell answers with: a box, one section, or the sloped cell itself.
+fn cell_shape(cell: &Cell, corners: &[DVec3], low: DVec3, high: DVec3) -> Result<NicheShape, NicheRefusal> {
+    if is_box(corners, low, high) {
+        return Ok(NicheShape::Box);
+    }
+    if !cell.is_prism() {
+        return Ok(NicheShape::Sloped);
+    }
+    let polygon = cut_planes(&cell.planes, 2, low.z, low.z, 0, 1).ok_or(NicheRefusal::Unrepresentable)?;
+    ring(polygon).map(NicheShape::Section).ok_or(NicheRefusal::Unrepresentable)
+}
+
+/// Whether the corners are exactly the eight corners of the box they span.
+fn is_box(corners: &[DVec3], low: DVec3, high: DVec3) -> bool {
+    corners.len() == 8
+        && corners.iter().all(|corner| {
+            [0usize, 1, 2].iter().all(|axis| {
+                let value = corner[*axis];
+                (value - low[*axis]).abs() <= COORDINATE_TOLERANCE
+                    || (value - high[*axis]).abs() <= COORDINATE_TOLERANCE
+            })
+        })
+}
+
+/// The plane of a probed face, in the product's frame.
+fn plane_of(face: ProbeFace, inverse: Placement) -> Option<NichePlane> {
+    let hit = inverse.transform_point(face.point);
+    let normal = inverse.transform_vector(face.normal).try_normalize()?;
+    if !hit.is_finite() {
+        return None;
+    }
+    Some(NichePlane { normal, offset: normal.dot(hit) })
+}
+
+/// Where three planes meet, or `None` when they do not meet in a point.
+fn corner_of(first: &NichePlane, second: &NichePlane, third: &NichePlane) -> Option<DVec3> {
+    let across = second.normal.cross(third.normal);
+    let determinant = first.normal.dot(across);
     if !determinant.is_finite() || determinant.abs() < SECTION_ANGLE {
         return None;
     }
-    let first_offset = first.normal.dot(first.point);
-    let second_offset = second.normal.dot(second.point);
-    let x = (first_offset * second.normal.y - second_offset * first.normal.y) / determinant;
-    let y = (first.normal.x * second_offset - second.normal.x * first_offset) / determinant;
-    let corner = DVec2::new(x, y);
-    corner.is_finite().then_some(corner)
+    let point = (across * first.offset
+        + third.normal.cross(first.normal) * second.offset
+        + first.normal.cross(second.normal) * third.offset)
+        / determinant;
+    point.is_finite().then_some(point)
 }
 
-/// The signed area of the polygon; positive when its corners run counter-clockwise.
-fn signed_area(corners: [DVec2; 4]) -> f64 {
+/// The cell cut by a slab along `axis`, as the convex polygon seen in the `(u, v)` axes.
+///
+/// Every plane's half-space is evaluated at the slab's own two ends, so the polygon is exactly the
+/// set of `(u, v)` points whose whole slab lies in the cell. The corners are the pairwise meeting
+/// points of the cut lines; the cell's own planes keep the polygon bounded.
+fn cut_planes(planes: &[NichePlane], axis: usize, low: f64, high: f64, u: usize, v: usize) -> Option<Vec<DVec2>> {
+    if axis > 2 || u > 2 || v > 2 || axis == u || u == v || axis == v || !low.is_finite() || !high.is_finite() {
+        return None;
+    }
+    let (low, high) = if low <= high { (low, high) } else { (high, low) };
+    if planes.len() < 4 {
+        return None;
+    }
+    // Each plane as a line in the cut's own plane: `normal · (u, v) >= offset`.
+    let mut lines: Vec<(DVec2, f64)> = Vec::with_capacity(planes.len());
+    for plane in planes {
+        let normal = plane.normal.to_array();
+        let along = normal[axis];
+        // The slab end that leaves the least room on this plane's free side.
+        let base = if along >= 0.0 { along * low } else { along * high };
+        let offset = plane.offset - base;
+        let flat = DVec2::new(normal[u], normal[v]);
+        if flat.length() < SECTION_NORMAL {
+            // The plane is level with the cut: it holds over the whole cut or not at all.
+            if base < plane.offset - COORDINATE_TOLERANCE {
+                return None;
+            }
+            continue;
+        }
+        lines.push((flat, offset));
+    }
+    let mut points: Vec<DVec2> = Vec::new();
+    for (index, first) in lines.iter().enumerate() {
+        for second in lines.iter().skip(index.saturating_add(1)) {
+            let determinant = first.0.x * second.0.y - first.0.y * second.0.x;
+            if !determinant.is_finite() || determinant.abs() < SECTION_ANGLE {
+                continue;
+            }
+            let point = DVec2::new(
+                (first.1 * second.0.y - second.1 * first.0.y) / determinant,
+                (first.0.x * second.1 - second.0.x * first.1) / determinant,
+            );
+            if !point.is_finite() {
+                continue;
+            }
+            if lines.iter().any(|(normal, offset)| normal.dot(point) - offset < -COORDINATE_TOLERANCE) {
+                continue;
+            }
+            if points.iter().any(|seen| (*seen - point).length() <= COORDINATE_TOLERANCE) {
+                continue;
+            }
+            points.push(point);
+        }
+    }
+    if points.len() < 3 || points.len() > MAX_CELL_CORNERS {
+        return None;
+    }
+    order_ring(&mut points)?;
+    Some(points)
+}
+
+/// Puts a convex polygon's corners in counter-clockwise order around their own centroid.
+fn order_ring(points: &mut [DVec2]) -> Option<()> {
+    let middle = centre(points)?;
+    points.sort_by(|first, second| {
+        let left = (first.y - middle.y).atan2(first.x - middle.x);
+        let right = (second.y - middle.y).atan2(second.x - middle.x);
+        left.total_cmp(&right).then((*first - middle).length_squared().total_cmp(&(*second - middle).length_squared()))
+    });
+    (signed_area(points) > SECTION_TOLERANCE).then_some(())
+}
+
+/// The signed area of a polygon; positive when its corners run counter-clockwise.
+fn signed_area(points: &[DVec2]) -> f64 {
     let mut total = 0.0;
-    for index in 0..corners.len() {
-        let (Some(start), Some(end)) = (corners.get(index), corners.get((index + 1) % corners.len())) else {
+    for index in 0..points.len() {
+        let (Some(start), Some(end)) = (points.get(index), points.get((index + 1) % points.len())) else {
             continue;
         };
         total += start.x * end.y - end.x * start.y;
@@ -554,34 +742,52 @@ fn signed_area(corners: [DVec2; 4]) -> f64 {
     total * 0.5
 }
 
-/// Whether a section corner lies on the face of the wall that stopped the probe.
+/// The average of a polygon's corners, or `None` when there are none or it is not finite.
+fn centre(points: &[DVec2]) -> Option<DVec2> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut sum = DVec2::ZERO;
+    for point in points {
+        sum += *point;
+    }
+    let middle = sum / points.len() as f64;
+    middle.is_finite().then_some(middle)
+}
+
+/// The polygon as the document ring a panel stores as its outline.
 ///
-/// The corner is on the face's supporting line by construction; a wall that ends before the corner —
-/// a half-depth panel — does not own the whole edge, so the void is not one extruded shape.
-fn within_face(wall: Wall, placement: Placement, corner: DVec2, z: f64) -> bool {
-    let world = placement.transform_point(DVec3::new(corner.x, corner.y, z));
-    let Ok(inverse) = wall.surface.world.inverse() else {
-        return false;
-    };
-    let local = inverse.transform_point(world);
-    if !local.is_finite() {
-        return false;
+/// The polygon is measured as a geometry region first — a degenerate or self-crossing section is
+/// refused there — and the document ring is built from the same corners, rounded to the micrometre.
+fn ring(points: Vec<DVec2>) -> Option<Contour> {
+    Region::from_loops(points.clone(), Vec::new()).ok()?;
+    let points = points.into_iter().map(document_point).collect::<Option<Vec<_>>>()?;
+    Contour::from_polygon(points).ok()
+}
+
+/// One point of a section as the document's micrometres.
+fn document_point(point: DVec2) -> Option<[Length; 2]> {
+    Some([Length::from_micrometres(micrometres(point.x)?), Length::from_micrometres(micrometres(point.y)?)])
+}
+
+/// A millimetre measurement as the document's whole micrometres, or `None` when it is not a number.
+fn micrometres(value: f64) -> Option<i64> {
+    let rounded = (value * 1000.0).round();
+    if !rounded.is_finite() || rounded.abs() > i64::MAX as f64 {
+        return None;
     }
-    for axis in 0..3 {
-        if axis == wall.axis {
-            continue;
-        }
-        let values = local.to_array();
-        let low = wall.surface.local_min.to_array();
-        let high = wall.surface.local_max.to_array();
-        let (Some(value), Some(low), Some(high)) = (values.get(axis), low.get(axis), high.get(axis)) else {
-            return false;
-        };
-        if *value < low - COORDINATE_TOLERANCE || *value > high + COORDINATE_TOLERANCE {
-            return false;
-        }
-    }
-    true
+    Some(rounded as i64)
+}
+
+/// Whether `point` lies inside the box, allowing the micrometre the document stores.
+fn within_box(point: DVec3, min: DVec3, max: DVec3) -> bool {
+    (0..3)
+        .all(|axis| point[axis] >= min[axis] - COORDINATE_TOLERANCE && point[axis] <= max[axis] + COORDINATE_TOLERANCE)
+}
+
+/// The order corners are listed in, so the same cell always reports the same list.
+fn corner_order(first: &DVec3, second: &DVec3) -> std::cmp::Ordering {
+    first.x.total_cmp(&second.x).then(first.y.total_cmp(&second.y)).then(first.z.total_cmp(&second.z))
 }
 
 /// A point rounded to the micrometre the document stores.
@@ -589,28 +795,17 @@ fn quantised_point(point: DVec2) -> DVec2 {
     DVec2::new(quantised(point.x), quantised(point.y))
 }
 
-/// Whether the placement's rotation maps each local axis onto a world axis.
-fn axis_aligned(placement: Placement) -> bool {
-    for unit in [DVec3::X, DVec3::Y, DVec3::Z] {
-        let mapped = placement.transform_vector(unit);
-        if !mapped.is_finite() {
-            return false;
-        }
-        let components = [mapped.x.abs(), mapped.y.abs(), mapped.z.abs()];
-        let strong = components.iter().filter(|value| **value > 0.5).count();
-        let weak = components.iter().filter(|value| **value <= 0.5).count();
-        let aligned = components.iter().any(|value| (*value - 1.0).abs() <= AXIS_ALIGNMENT);
-        if strong != 1 || weak != 2 || !aligned {
-            return false;
-        }
-    }
-    true
+/// A cell corner rounded to the micrometre the document stores.
+fn quantised_corner(point: DVec3) -> DVec3 {
+    DVec3::new(quantised(point.x), quantised(point.y), quantised(point.z))
 }
 
 /// Rounds a measurement to the micrometre the document stores.
 fn quantised(value: f64) -> f64 {
-    let rounded = (value * 1000.0).round() / 1000.0;
-    if rounded.is_finite() { rounded } else { 0.0 }
+    match micrometres(value) {
+        Some(whole) => whole as f64 / 1000.0,
+        None => 0.0,
+    }
 }
 
 #[cfg(test)]
@@ -644,12 +839,21 @@ mod tests {
         project.add_panel(parent, "Part", nominal, None, millimetres(size.2), placement).expect("add panel")
     }
 
+    /// A board of `length x width x thickness` millimetres, turned by `rotation` and based at `at`.
+    fn board(project: &mut Project, parent: Id, at: DVec3, rotation: DQuat, size: (i64, i64, i64)) -> Id {
+        let nominal = PanelNominalSize::new(millimetres(size.0), millimetres(size.1)).expect("a board size");
+        let placement = Placement::new(at, rotation).expect("a placement");
+        project.add_panel(parent, "Board", nominal, None, millimetres(size.2), placement).expect("add a board")
+    }
+
     /// A standing post whose inner face runs through `through`, angled so that face's normal
     /// pointing into the free space is `normal` (both in the product's XY plane, millimetres).
     ///
-    /// The post is 720 mm tall, 18 mm thick and wide enough to cross the whole depth: the panel's
-    /// local X runs down the height, its local Y along the depth and its local Z through the
-    /// thickness, so a rotation about Y stands it up and a rotation about Z splays it.
+    /// The post is 720 mm tall, 18 mm thick and wide enough to cross the whole depth. It stands in
+    /// the post's stance (ADR 0105): the panel's local X runs up the height, its local Y along the
+    /// depth, and its local Z through the thickness away from the free space, so a quarter-turn about
+    /// Y stands it up and a rotation about Z splays it. The face the free space touches is the
+    /// board's own `z = 0` face and the node's base corner sits on the void's floor.
     fn angled_post(project: &mut Project, parent: Id, through: (f64, f64), normal: (f64, f64)) -> Id {
         let direction = (-normal.1, normal.0);
         // The panel is 1200 mm wide, so the start of its local Y is placed to centre that span on
@@ -657,11 +861,35 @@ mod tests {
         let start_y = 280.0 - 600.0 * direction.1;
         let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
         let angle = normal.1.atan2(normal.0);
-        let rotation = DQuat::from_rotation_z(angle) * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-        let translation = DVec3::new(start_x, start_y, 720.0) - DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+        let rotation = DQuat::from_rotation_z(angle) * DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        let translation = DVec3::new(start_x, start_y, 0.0);
         let placement = Placement::new(translation, rotation).expect("a placement");
         let nominal = PanelNominalSize::new(millimetres(720), millimetres(1200)).expect("a post size");
         project.add_panel(parent, "Post", nominal, None, millimetres(18), placement).expect("add a post")
+    }
+
+    /// A board standing up and leaning `lean` radians forward, its face on the piece's back edge.
+    ///
+    /// Its length climbs the leaned face, its thickness runs away from the void and its width runs
+    /// back along the product's X, so the free space touches the board's own `z = 0` face.
+    fn leaned_back_wall(project: &mut Project, parent: Id) -> Id {
+        let lean = 15.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        let up = DVec3::new(0.0, -sin, cos);
+        let away = DVec3::new(0.0, cos, sin);
+        let rotation = DQuat::from_rotation_axes(up.cross(away), up, away);
+        board(project, parent, DVec3::new(600.0, 560.0, 0.0), rotation, (600, 900, 18))
+    }
+
+    /// A board lying over the void and coming down towards the back: its underside is the void's
+    /// ceiling, 699.5 mm above the floor at the front and 98 mm lower at the back.
+    fn leaned_ceiling(project: &mut Project, parent: Id) -> Id {
+        let lean = 10.0_f64.to_radians();
+        let (sin, cos) = lean.sin_cos();
+        let along = DVec3::new(0.0, cos, -sin);
+        let away = DVec3::new(0.0, sin, cos);
+        let rotation = DQuat::from_rotation_axes(along.cross(away), along, away);
+        board(project, parent, DVec3::new(0.0, 0.0, 699.5), rotation, (600, 620, 18))
     }
 
     /// An empty document with a root and nothing else, so a product's own box is the only surface.
@@ -675,6 +903,11 @@ mod tests {
         let mut project = clean_project();
         let id = product(&mut project, (600, 560, 720), (0, 0, 0));
         (project, id)
+    }
+
+    /// Whether a point is inside every supporting plane of the niche.
+    fn fits(niche: &Niche, point: DVec3) -> bool {
+        niche.planes.iter().all(|plane| plane.distance_to(point) >= -super::COORDINATE_TOLERANCE)
     }
 
     #[test]
@@ -752,6 +985,7 @@ mod tests {
         let below = project.niche(DVec3::new(300.0, 280.0, 100.0)).expect("the niche under the shelf");
         assert_eq!(below.local_min, DVec3::ZERO);
         assert_eq!(below.size, DVec3::new(600.0, 560.0, 350.0));
+        assert_eq!(below.corners.len(), 8, "a box has eight corners");
         let above = project.niche(DVec3::new(300.0, 280.0, 500.0)).expect("the niche above the shelf");
         assert_eq!(above.local_min, DVec3::new(0.0, 0.0, 368.0), "the shelf's top face");
         assert_eq!(above.size, DVec3::new(600.0, 560.0, 352.0));
@@ -767,6 +1001,8 @@ mod tests {
         assert_eq!(niche.shape, NicheShape::Box);
         assert_eq!(niche.size, DVec3::new(600.0, 560.0, 720.0));
         assert_eq!(niche.side_mm(2), 720.0);
+        assert_eq!(niche.planes.len(), 6, "the envelope's six planes bound an empty piece");
+        assert_eq!(niche.corners.len(), 8);
     }
 
     #[test]
@@ -781,14 +1017,15 @@ mod tests {
         let ring = niche.section().expect("the section is a polygon, not the box around it");
         let corners: Vec<[Length; 2]> = ring.sampled_points(1.0).expect("the ring is line only");
         let expected = [
-            [millimetres(400), millimetres(560)],
-            [millimetres(200), millimetres(560)],
             [millimetres(100), millimetres(0)],
             [millimetres(500), millimetres(0)],
+            [millimetres(400), millimetres(560)],
+            [millimetres(200), millimetres(560)],
         ];
-        assert_eq!(corners, expected, "the trapezoid's own vertices");
+        assert_eq!(corners, expected, "the trapezoid's own vertices, counter-clockwise from its corner");
         assert_eq!(niche.local_min, DVec3::new(100.0, 0.0, 0.0));
         assert_eq!(niche.size, DVec3::new(400.0, 560.0, 720.0), "the box around the section");
+        assert_eq!(niche.corners.len(), 8, "two upright walls keep the cell a prism");
     }
 
     /// Places a mirrored pair of angled posts whose inner faces pass through (100, 0) and (500, 0).
@@ -798,31 +1035,151 @@ mod tests {
     }
 
     #[test]
-    fn a_wall_that_stops_halfway_is_refused() {
-        // A post that reaches only 300 mm up does not bound one extruded shape, so a point beside it
-        // has no niche the tool could cut a shelf to.
+    fn a_leaned_back_wall_bounds_a_sloped_cell() {
         let (mut project, piece) = empty_piece();
-        // A standing panel 300 mm tall, 18 mm thick: local X runs down its height, so a rotation
-        // about Y stands it up with its face across the case.
-        let nominal = PanelNominalSize::new(millimetres(300), millimetres(560)).expect("a short post");
-        let rotation = furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-        let placement = Placement::new(DVec3::new(300.0, 0.0, 300.0), rotation).expect("a place");
-        project.add_panel(piece, "Stub", nominal, None, millimetres(18), placement).expect("add a stub");
-        let refusal = project.niche(DVec3::new(150.0, 280.0, 200.0)).expect_err("half a wall is not a wall");
-        assert_eq!(refusal, NicheRefusal::Unrepresentable);
+        leaned_back_wall(&mut project, piece);
+        let niche = project.niche(DVec3::new(300.0, 200.0, 300.0)).expect("a cell in front of a leaned wall");
+        assert_eq!(niche.shape, NicheShape::Sloped, "one ring would be false somewhere in the void");
+        assert!(niche.section().is_none());
+        assert_eq!(niche.local_min, DVec3::ZERO);
+        assert_eq!(niche.size, DVec3::new(600.0, 560.0, 720.0), "the box around the cell");
+        // The wall runs from (y = 560, z = 0) to (y = 367.2, z = 720): the top of the void is
+        // 192.8 mm shallower than its floor.
+        let top = niche.corners.iter().copied().filter(|corner| corner.z > 700.0);
+        let deepest = top.map(|corner| corner.y).fold(f64::NEG_INFINITY, f64::max);
+        assert!((deepest - 367.2).abs() < 1.0, "the cell's back edge at the top is {deepest}");
+        for corner in &niche.corners {
+            assert!(fits(&niche, *corner), "a corner left the cell: {corner:?}");
+        }
     }
 
     #[test]
-    fn a_turned_piece_is_refused_by_the_box_query_but_not_by_the_probe() {
+    fn a_shelf_under_a_leaned_wall_is_cut_where_the_wall_leans_in() {
+        let (mut project, piece) = empty_piece();
+        leaned_back_wall(&mut project, piece);
+        let niche = project.niche(DVec3::new(300.0, 200.0, 300.0)).expect("a cell");
+        // The wall leans 0.268 mm into the void per millimetre of height, so a shelf stops on the
+        // wall's face at its own top instead of cutting into it.
+        let low = niche.cut(2, (100.0, 118.0), (0, 1)).expect("a low shelf's footprint");
+        let deepest = low.iter().map(|point| point.y).fold(f64::MIN, f64::max);
+        assert!((deepest - 528.4).abs() < 1.0, "the low shelf ends on the wall at 118 mm: {deepest}");
+        // The same shelf 500 mm higher is 134 mm shallower, which is the wall's own rake.
+        let high = niche.cut(2, (600.0, 618.0), (0, 1)).expect("a high shelf's footprint");
+        let deepest = high.iter().map(|point| point.y).fold(f64::MIN, f64::max);
+        assert!((deepest - 394.4).abs() < 1.0, "the shelf ends on the wall at 618 mm: {deepest}");
+        assert!(high.len() == 4, "the cut is still one rectangle: {high:?}");
+    }
+
+    #[test]
+    fn a_leaned_ceiling_is_measured_over_its_whole_footprint() {
+        let (mut project, piece) = empty_piece();
+        leaned_ceiling(&mut project, piece);
+        // The cursor's own height means nothing: the same cell answers from the front and the back.
+        let front = project.niche(DVec3::new(300.0, 20.0, 300.0)).expect("a cell under the ceiling");
+        let back = project.niche(DVec3::new(300.0, 540.0, 300.0)).expect("the same cell, further back");
+        assert_eq!(front.shape, NicheShape::Sloped);
+        assert_eq!(front.size, back.size, "the box is the void's, not the cursor's");
+        assert!((front.size.z - 699.5).abs() < 0.5, "the highest point of the ceiling: {}", front.size.z);
+        let shallow = |niche: &Niche| {
+            niche
+                .corners
+                .iter()
+                .copied()
+                .filter(|corner| corner.y > 500.0)
+                .map(|corner| corner.z)
+                .fold(f64::MIN, f64::max)
+        };
+        assert!((shallow(&front) - 601.4).abs() < 1.0, "the ceiling is 98 mm lower at the back: {}", shallow(&front));
+    }
+
+    #[test]
+    fn a_shelf_under_a_leaned_ceiling_stops_where_it_would_cut_in() {
+        let (mut project, piece) = empty_piece();
+        leaned_ceiling(&mut project, piece);
+        let niche = project.niche(DVec3::new(300.0, 540.0, 300.0)).expect("a cell");
+        let low = niche.cut(2, (100.0, 118.0), (0, 1)).expect("a low shelf's footprint");
+        let deepest = low.iter().map(|point| point.y).fold(f64::MIN, f64::max);
+        assert!((deepest - 560.0).abs() < 1.0, "a low shelf reaches the back: {deepest}");
+        let high = niche.cut(2, (590.0, 608.0), (0, 1)).expect("a high shelf's footprint");
+        let deepest = high.iter().map(|point| point.y).fold(f64::MIN, f64::max);
+        assert!((deepest - 519.0).abs() < 1.5, "a shelf at 608 mm stops under the ceiling: {deepest}");
+    }
+
+    #[test]
+    fn a_turned_piece_is_measured_in_its_own_frame() {
         let mut project = clean_project();
         let piece = product(&mut project, (600, 560, 720), (0, 0, 0));
-        let turned = Placement::IDENTITY
+        let turn = Placement::IDENTITY
             .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(45_000), ..EulerAngles::default() })
             .expect("a turn");
-        project.set_node_placement(piece, turned).expect("turn the piece");
-        let inside = DVec3::new(100.0, 100.0, 100.0);
-        assert!(project.probe(inside, DVec3::Z).is_some(), "a probe is a ray and still answers");
-        assert_eq!(project.niche(inside), Err(NicheRefusal::Turned), "a box would not fit a turned piece");
+        project.set_node_placement(piece, turn).expect("turn the piece");
+        let inside = turn.transform_point(DVec3::new(300.0, 280.0, 300.0));
+        let niche = project.niche(inside).expect("a turned piece has a niche of its own");
+        assert_eq!(niche.local_min, DVec3::ZERO, "measured in the piece's frame, not the world box");
+        assert_eq!(niche.size, DVec3::new(600.0, 560.0, 720.0));
+        assert_eq!(niche.shape, NicheShape::Box);
+        assert_eq!(niche.min, DVec3::ZERO, "and the world corner is the piece's own zero corner");
+    }
+
+    #[test]
+    fn a_body_standing_inside_the_cell_is_refused() {
+        // A 90 mm block sits between the probe directions of a point in an otherwise empty piece: the
+        // cell would swallow it, and a board cut to the cell would cut into it.
+        let (mut project, _piece) = empty_piece();
+        let root = project.root().id();
+        project
+            .add_object(
+                root,
+                "Block",
+                Placement::IDENTITY
+                    .with_translation(millimetres(500), millimetres(450), millimetres(200))
+                    .expect("a placement"),
+                sample_object(90).geometry().clone(),
+            )
+            .expect("add object");
+        let point = DVec3::new(300.0, 280.0, 300.0);
+        assert!(project.probe(point, DVec3::X).is_some(), "the piece itself still answers a probe");
+        assert_eq!(project.niche(point), Err(NicheRefusal::Unrepresentable), "a void holding a body is not a cell");
+    }
+
+    #[test]
+    fn a_wall_that_stops_halfway_still_bounds_the_void_beside_it() {
+        // A post that reaches only 300 mm up still has an inner face, and the void beside it is one
+        // cell. Its plane bounds the footprint for the whole height, so a shelf at any height stops
+        // at the post instead of being refused (ADR 0109).
+        let (mut project, piece) = empty_piece();
+        let nominal = PanelNominalSize::new(millimetres(300), millimetres(560)).expect("a short post");
+        let rotation = furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        let placement = Placement::new(DVec3::new(318.0, 0.0, 0.0), rotation).expect("a place");
+        project.add_panel(piece, "Stub", nominal, None, millimetres(18), placement).expect("add a stub");
+        let niche = project.niche(DVec3::new(150.0, 280.0, 200.0)).expect("the stub bounds the void");
+        assert_eq!(niche.shape, NicheShape::Box);
+        assert!((niche.local_max().x - 300.0).abs() < 1.0, "the post's inner face: {niche:?}");
+        assert!((niche.size.z - 720.0).abs() < 1.0, "the case is still 720 tall: {niche:?}");
+    }
+
+    #[test]
+    fn a_ceiling_that_covers_only_part_of_the_case_leaves_a_niche() {
+        // The open-front case: a top over the back two thirds and two walls that stop with it. The
+        // free space under the top is still one cell even though the top does not cover the whole
+        // envelope, which is what the coverage test used to refuse (ADR 0109).
+        let (mut project, piece) = empty_piece();
+        let top = PanelNominalSize::new(millimetres(600), millimetres(400)).expect("a short top");
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(0), millimetres(0), millimetres(702))
+            .expect("a top placement");
+        project.add_panel(piece, "Top", top, None, millimetres(18), placement).expect("add a top");
+        let wall = furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        for x in [18.0, 600.0] {
+            let nominal = PanelNominalSize::new(millimetres(720), millimetres(400)).expect("a short wall");
+            let placement = Placement::new(DVec3::new(x, 0.0, 0.0), wall).expect("a wall placement");
+            project.add_panel(piece, "Wall", nominal, None, millimetres(18), placement).expect("add a wall");
+        }
+        for y in [100.0, 300.0, 500.0] {
+            let niche = project.niche(DVec3::new(300.0, y, 300.0)).expect("a niche under the short top");
+            assert_eq!(niche.shape, NicheShape::Box);
+            assert!((niche.size.z - 702.0).abs() < 1.0, "the top still bounds the height: {niche:?}");
+        }
     }
 
     #[test]
@@ -830,6 +1187,17 @@ mod tests {
         let (project, _) = empty_piece();
         assert_eq!(project.niche(DVec3::new(-100.0, 0.0, 0.0)), Err(NicheRefusal::Outside));
         assert_eq!(project.niche(DVec3::splat(f64::NAN)), Err(NicheRefusal::Outside));
+    }
+
+    #[test]
+    fn a_cut_needs_three_axes_and_a_finite_slab() {
+        let (project, _) = empty_piece();
+        let niche = project.niche(DVec3::new(300.0, 280.0, 300.0)).expect("a niche");
+        assert!(niche.cut(2, (100.0, 118.0), (0, 1)).is_some());
+        assert_eq!(niche.cut(2, (100.0, 118.0), (2, 1)), None, "the cut cannot be seen along its own axis");
+        assert_eq!(niche.cut(3, (100.0, 118.0), (0, 1)), None);
+        assert_eq!(niche.cut(2, (f64::NAN, 0.0), (0, 1)), None);
+        assert_eq!(niche.cut(2, (800.0, 820.0), (0, 1)), None, "a slab above the void has no footprint");
     }
 
     #[test]

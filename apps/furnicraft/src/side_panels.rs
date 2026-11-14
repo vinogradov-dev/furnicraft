@@ -226,12 +226,19 @@ pub(crate) struct Chrome {
     pub(crate) panels: PanelRects,
     /// The band the floating ribbon covers.
     pub(crate) ribbon: egui::Rect,
+    /// The rectangle of the open method list, when a ribbon cell drew one this frame.
+    ///
+    /// The popup hangs under the band and over the scene, so it is a surface above the viewport,
+    /// not a part of the band: a press or a tool cursor inside it belongs to the list (X37).
+    pub(crate) list: Option<egui::Rect>,
 }
 
 impl Chrome {
     /// Whether `point` lies on chrome rather than on the scene.
     pub(crate) fn covers(&self, point: egui::Pos2) -> bool {
-        self.ribbon.contains(point) || self.panels.panels().any(|rect| rect.contains(point))
+        self.ribbon.contains(point)
+            || self.list.is_some_and(|list| list.contains(point))
+            || self.panels.panels().any(|rect| rect.contains(point))
     }
 
     /// The part of the viewport the scene owns.
@@ -479,7 +486,11 @@ mod tests {
         let top = viewport.top() + panel_top(ribbon_height);
         let ribbon = egui::Rect::from_min_size(viewport.min, egui::vec2(viewport.width(), ribbon_height));
         let width = |state: PanelState| if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
-        Chrome { panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))), ribbon }
+        Chrome {
+            panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))),
+            ribbon,
+            list: None,
+        }
     }
 
     /// The frame geometry of both panels shown at their expanded width under a 76 pt ribbon.

@@ -6,7 +6,7 @@
 //! explains itself. It also holds the one rule the button and the draft agree on: when a running
 //! chain can be closed.
 
-use furnicraft_model::Id;
+use furnicraft_model::{FillMode, Id, PrimitiveKind};
 use furnicraft_text::{Lang, Message};
 
 use super::spec::{ToolKind, ToolSpec};
@@ -66,7 +66,14 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
         }
         ToolKind::Primitive(primitive) => {
             let armed = is_armed(active, ToolKind::Primitive(primitive));
-            let hint = Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)]);
+            // A box is drawn: its base is a rectangle on the plane and its height a pull, so the
+            // hint names the first step rather than a click that would place it (ADR 0101).
+            let hint = match primitive {
+                PrimitiveKind::Cuboid => Message::PrimitiveDrawBase.with(lang, [tool.label.text(lang)]),
+                PrimitiveKind::Cylinder | PrimitiveKind::Sphere => {
+                    Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)])
+                }
+            };
             let action = ToolAction::CreatePrimitive { kind: primitive, size: state.primitive_size() };
             Ready { enabled: true, armed, hint, action: Some(action) }
         }
@@ -91,17 +98,32 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
             hint: tool_hint(tool.label.text(lang), tool.shortcut),
             action: Some(ToolAction::CreateProductCard),
         },
+        ToolKind::ProductDraw => Ready {
+            enabled: true,
+            armed: is_armed(active, kind),
+            // The drawn frame is the box gesture with the envelope as its owner: the first step is
+            // the base rectangle, exactly as it is for a solid (ADR 0101).
+            hint: Message::PrimitiveDrawBase.with(lang, [tool.label.text(lang)]),
+            action: Some(ToolAction::DrawProductFrame),
+        },
         ToolKind::Panel => Ready {
             enabled: has_panel_material,
             armed: false,
             hint: tool_hint(tool.label.text(lang), tool.shortcut),
             action: Some(ToolAction::CreatePanel),
         },
-        ToolKind::Fill(class) => {
+        ToolKind::Fill { class, mode } => {
             // A niche belongs to the open product (ADR 0098) and a part needs a material to take its
             // thickness from; the class must actually carry the `fill` trait, so a table row that
             // lost it disables the cell instead of arming a tool with no axis pair.
             let fills = class.traits().and_then(|traits| traits.fill()).is_some();
+            let method = match mode {
+                FillMode::Fit => Message::FillMethodFit,
+                FillMode::Shape => Message::FillMethodShape,
+            };
+            // The two methods of one cell would otherwise read the same, so a hint that can run
+            // names the tool and then the method: «Post: Largest rectangle».
+            let ready = Message::FillMethod.with(lang, [tool.label.text(lang), method.text(lang)]);
             let hint = if !product_open {
                 Message::FillNeedsProduct.text(lang)
             } else if !has_panel_material {
@@ -109,14 +131,14 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
             } else if !fills {
                 Message::FillNeedsFillTrait.text(lang)
             } else {
-                tool.label.text(lang)
+                ready.as_str()
             };
             let enabled = product_open && has_panel_material && fills;
             Ready {
                 enabled,
                 armed: is_armed(active, kind),
                 hint: tool_hint(hint, tool.shortcut),
-                action: enabled.then_some(ToolAction::Fill { class }),
+                action: enabled.then_some(ToolAction::Fill { class, mode }),
             }
         }
         ToolKind::Assembly => Ready {

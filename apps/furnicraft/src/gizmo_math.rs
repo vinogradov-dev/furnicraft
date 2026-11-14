@@ -875,7 +875,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::{
-        CameraProjection, ClassCode, Container, Envelope, Geometry, LightKind, Mesh, Panel, Project, PropertyValue,
+        CameraProjection, ClassCode, Container, Envelope, Geometry, LightKind, Panel, Project, PropertyValue,
         SYSTEM_CLASS,
     };
     use furnicraft_testkit::{millimetres, sample_panel_nominal_size, sample_panel_thickness, sample_project};
@@ -1408,7 +1408,7 @@ mod tests {
     fn classed_cube(code: &str) -> (Project, Id) {
         let mut project = sample_project();
         let root = project.root().id();
-        let mesh = Mesh::cube(millimetres(100)).expect("cube");
+        let mesh = furnicraft_testkit::cube_mesh(millimetres(100));
         let object = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("object");
         if !code.is_empty() {
             project

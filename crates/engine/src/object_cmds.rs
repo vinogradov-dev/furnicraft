@@ -40,6 +40,13 @@ pub const OBJECT_PRIMITIVE_REPLACE_LABEL: Message = Message::CmdReplacePrimitive
 pub use furnicraft_model::{MAX_PRIMITIVE_SIZE, PrimitiveKind};
 
 /// Parameters for `object.primitive.create`.
+///
+/// The payload is the validated parameter set itself, not a kind and one extent: a box is drawn
+/// with three independent sides, so the caller names the shape it built and the command stores it
+/// as it stands (ADR 0101). A sphere, a cylinder and an equal-sided box are built from the creation
+/// size by [`Primitive::from_kind`].
+///
+/// [ADR 0101]: ../docs/decisions/0101-a-frame-and-a-box-are-one-tool.md
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectPrimitiveCreate {
@@ -47,11 +54,9 @@ pub struct ObjectPrimitiveCreate {
     pub parent: Id,
     /// User-visible name; it must contain a non-whitespace character.
     pub name: String,
-    /// Which primitive to build.
-    pub primitive: PrimitiveKind,
-    /// Full extent of the shape: the cube's edge, or the diameter of a cylinder or sphere.
-    pub size: Length,
-    /// Placement relative to the parent container.
+    /// The validated shape and its parameters.
+    pub primitive: Primitive,
+    /// Placement relative to the parent container: the box's base corner sits on it.
     pub placement: Placement,
 }
 
@@ -63,18 +68,11 @@ pub(crate) const OBJECT_PRIMITIVE_CREATE: CommandSpec = CommandSpec::new(
     object_primitive_create_run,
 );
 
-/// The primitive the creation size builds, or the reason it cannot be built.
-fn creation_primitive(kind: PrimitiveKind, size: Length) -> Result<Primitive, String> {
-    Primitive::from_kind(kind, size).map_err(|error| error.to_string())
-}
-
 fn object_primitive_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<ObjectPrimitiveCreate>(params, OBJECT_PRIMITIVE_CREATE_ID) else {
         return false;
     };
-    !params.name.trim().is_empty()
-        && session.project().is_container(params.parent)
-        && creation_primitive(params.primitive, params.size).is_ok()
+    !params.name.trim().is_empty() && session.project().is_container(params.parent)
 }
 
 fn object_primitive_create_run(
@@ -84,9 +82,7 @@ fn object_primitive_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectPrimitiveCreate>(params, OBJECT_PRIMITIVE_CREATE_ID)?;
     validate_name(&params.name, OBJECT_PRIMITIVE_CREATE_ID)?;
-    let primitive = creation_primitive(params.primitive, params.size)
-        .map_err(|message| CommandError::InvalidParams { command: OBJECT_PRIMITIVE_CREATE_ID, message })?;
-    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Primitive(primitive))?;
+    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Primitive(params.primitive))?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -532,12 +528,13 @@ mod tests {
 
     use super::*;
 
-    fn cube_params(session: &Session, size: Length) -> Value {
+    /// A box 600 x 400 x 720 mm at the scene root.
+    fn box_params(session: &Session) -> Value {
+        let primitive = Primitive::cuboid(millimetres(600), millimetres(400), millimetres(720)).expect("a box");
         serde_json::to_value(ObjectPrimitiveCreate {
             parent: session.project().root().id(),
-            name: "Cube".to_owned(),
-            primitive: PrimitiveKind::Cube,
-            size,
+            name: "Box".to_owned(),
+            primitive,
             placement: Placement::IDENTITY,
         })
         .expect("params serialize")
@@ -546,16 +543,16 @@ mod tests {
     #[test]
     fn dispatch_stores_the_recipe_in_one_revision() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let params = cube_params(&session, Length::from_millimetres(100).expect("length"));
+        let params = box_params(&session);
 
-        let outcome = session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).expect("create cube");
+        let outcome = session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).expect("create box");
 
         let id = outcome.created_id().expect("the command returns the new object id");
         assert_eq!(session.project().revision().get(), 1);
         let object = session.project().object(id).expect("object");
-        assert_eq!(object.name(), "Cube");
+        assert_eq!(object.name(), "Box");
         let primitive = object.geometry().as_primitive().expect("a parametric payload");
-        assert_eq!(primitive, &Primitive::cube(Length::from_millimetres(100).expect("length")).expect("cube"));
+        assert_eq!(primitive, &Primitive::cuboid(millimetres(600), millimetres(400), millimetres(720)).expect("a box"));
         assert!(object.geometry().as_mesh().is_none(), "the mesh is derived, not stored");
         assert!(session.can_undo());
 
@@ -570,20 +567,16 @@ mod tests {
         assert_eq!(session.active_product(), None, "a primitive is a scene object, not a furniture part");
         let size = Length::from_millimetres(100).expect("length");
         let cases = [
-            (PrimitiveKind::Cube, 8, 6),
-            (PrimitiveKind::Cylinder, DEFAULT_SEGMENTS as usize * 2, DEFAULT_SEGMENTS as usize + 2),
-            (
-                PrimitiveKind::Sphere,
-                2 + DEFAULT_SEGMENTS as usize * (DEFAULT_BANDS as usize - 1),
-                DEFAULT_SEGMENTS as usize * DEFAULT_BANDS as usize,
-            ),
+            (Primitive::from_kind(PrimitiveKind::Cuboid, size).expect("box"), ([0; 3], [100_000; 3])),
+            (Primitive::from_kind(PrimitiveKind::Cylinder, size).expect("cylinder"), ([-50_000; 3], [50_000; 3])),
+            (Primitive::from_kind(PrimitiveKind::Sphere, size).expect("sphere"), ([-50_000; 3], [50_000; 3])),
         ];
-        for (primitive, vertices, faces) in cases {
+        for (primitive, bounds) in cases {
+            let kind = primitive.kind();
             let params = serde_json::to_value(ObjectPrimitiveCreate {
                 parent: session.project().root().id(),
                 name: "Primitive".to_owned(),
-                primitive,
-                size,
+                primitive: primitive.clone(),
                 placement: Placement::IDENTITY,
             })
             .expect("params serialize");
@@ -591,23 +584,40 @@ mod tests {
             let id = outcome.created_id().expect("an id");
             let object = session.project().object(id).expect("object");
             let stored = object.geometry().as_primitive().expect("a parametric payload");
-            assert_eq!(stored.kind(), primitive, "{primitive:?} keeps its shape");
-            assert_eq!(stored.mesh_counts(), (vertices, faces), "{primitive:?} counts");
-            assert_eq!(stored.bounds_micrometres(), ([-50_000; 3], [50_000; 3]), "{primitive:?} bounds");
+            assert_eq!(stored, &primitive, "{kind:?} keeps its parameters");
+            assert_eq!(stored.bounds_micrometres(), bounds, "{kind:?} bounds");
         }
         assert_eq!(session.project().revision().get(), 3, "one command per primitive");
+        assert_eq!(
+            Primitive::from_kind(PrimitiveKind::Cuboid, size).expect("box").mesh_counts(),
+            (8, 6),
+            "a box keeps eight corners and six faces"
+        );
+        assert_eq!(
+            Primitive::from_kind(PrimitiveKind::Cylinder, size).expect("cylinder").mesh_counts(),
+            (DEFAULT_SEGMENTS as usize * 2, DEFAULT_SEGMENTS as usize + 2)
+        );
+        assert_eq!(
+            Primitive::from_kind(PrimitiveKind::Sphere, size).expect("sphere").mesh_counts(),
+            (
+                2 + DEFAULT_SEGMENTS as usize * (DEFAULT_BANDS as usize - 1),
+                DEFAULT_SEGMENTS as usize * DEFAULT_BANDS as usize
+            )
+        );
     }
 
     #[test]
-    fn a_size_outside_the_limit_is_rejected_without_mutating() {
+    fn a_side_outside_the_limit_is_rejected_without_mutating() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let too_large = MAX_PRIMITIVE_SIZE.checked_add(Length::from_micrometres(1)).expect("sum");
-        for size in [Length::ZERO, Length::from_micrometres(1), too_large] {
-            let params = cube_params(&session, size);
-            let registry = CommandRegistry::new();
-            let spec = registry.get(OBJECT_PRIMITIVE_CREATE_ID).expect("registered");
-            assert!(!spec.enabled(&session, &params), "size {size} is not creatable");
-            assert!(session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).is_err(), "size {size} must be rejected");
+        // The parameters are hostile JSON, not a value this build can build: a shape asks for a
+        // side outside the document's limit and the command refuses to read it at all.
+        for size in [0, 1, too_large.micrometres()] {
+            let mut params = box_params(&session);
+            params["primitive"]["width"] = Value::from(size);
+            let spec = CommandRegistry::new().get(OBJECT_PRIMITIVE_CREATE_ID).expect("registered");
+            assert!(!spec.enabled(&session, &params), "width {size} is not creatable");
+            assert!(session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).is_err(), "width {size} is refused");
         }
         assert_eq!(session.project().revision(), Revision::ZERO);
         assert!(!session.can_undo());
@@ -616,14 +626,8 @@ mod tests {
     #[test]
     fn a_blank_name_is_rejected_without_mutating() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let value = serde_json::to_value(ObjectPrimitiveCreate {
-            parent: session.project().root().id(),
-            name: "  ".to_owned(),
-            primitive: PrimitiveKind::Cube,
-            size: Length::from_millimetres(100).expect("length"),
-            placement: Placement::IDENTITY,
-        })
-        .expect("params serialize");
+        let mut value = box_params(&session);
+        value["name"] = Value::from("  ");
         assert!(session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &value).is_err());
         assert_eq!(session.project().revision(), Revision::ZERO);
     }
@@ -631,14 +635,8 @@ mod tests {
     #[test]
     fn an_unknown_parent_is_rejected_without_mutating() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let value = serde_json::to_value(ObjectPrimitiveCreate {
-            parent: Id::new(99).expect("id"),
-            name: "Cube".to_owned(),
-            primitive: PrimitiveKind::Cube,
-            size: Length::from_millimetres(100).expect("length"),
-            placement: Placement::IDENTITY,
-        })
-        .expect("params serialize");
+        let mut value = box_params(&session);
+        value["parent"] = Value::from(99);
         assert!(session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &value).is_err());
         assert_eq!(session.project().revision(), Revision::ZERO);
     }
@@ -647,11 +645,11 @@ mod tests {
     fn replacing_the_parameters_is_one_revision_and_one_undo() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let id = session
-            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &cube_params(&session, Length::from_millimetres(100).expect("size")))
+            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &box_params(&session))
             .expect("create")
             .created_id()
             .expect("id");
-        let original = Primitive::cube(Length::from_millimetres(100).expect("size")).expect("cube");
+        let original = Primitive::cuboid(millimetres(600), millimetres(400), millimetres(720)).expect("a box");
         assert_eq!(session.project().object_primitive(id), Ok(&original));
 
         let smoother = Primitive::sphere(Length::from_millimetres(60).expect("radius"), 24, 12).expect("sphere");
@@ -663,7 +661,7 @@ mod tests {
         session.dispatch(OBJECT_PRIMITIVE_REPLACE_ID, &value).expect("replace the parameters");
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per edit");
         let object = session.project().object(id).expect("object");
-        assert_eq!(object.name(), "Cube", "only the parameters change");
+        assert_eq!(object.name(), "Box", "only the parameters change");
         assert_eq!(object.geometry().as_primitive(), Some(&smoother));
 
         session.undo().expect("one undo restores the parameters");
@@ -678,8 +676,7 @@ mod tests {
         let value = serde_json::to_value(ObjectPrimitiveCreate {
             parent: session.project().root().id(),
             name: "Ball".to_owned(),
-            primitive: PrimitiveKind::Sphere,
-            size,
+            primitive: Primitive::from_kind(PrimitiveKind::Sphere, size).expect("a sphere"),
             placement: Placement::IDENTITY,
         })
         .expect("params serialize");
@@ -718,7 +715,7 @@ mod tests {
         let before = session.project().revision();
         let value = serde_json::to_value(ObjectPrimitiveReplace {
             object: id,
-            primitive: Primitive::cube(Length::from_millimetres(20).expect("size")).expect("cube"),
+            primitive: Primitive::cuboid(millimetres(20), millimetres(20), millimetres(20)).expect("a box"),
         })
         .expect("params");
         let spec = CommandRegistry::new().get(OBJECT_PRIMITIVE_REPLACE_ID).expect("registered");
@@ -919,15 +916,15 @@ mod tests {
         assert_eq!(session.project().revision(), Revision::ZERO);
         assert!(!session.can_undo());
 
-        let cube = session
-            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &cube_params(&session, Length::from_millimetres(10).expect("size")))
-            .expect("a cube to compare kinds")
+        let box_ = session
+            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &box_params(&session))
+            .expect("a box to compare kinds")
             .created_id()
             .expect("id");
-        let value = serde_json::to_value(ObjectContourReplace { object: cube, path: rectangle(10, 10).into() })
+        let value = serde_json::to_value(ObjectContourReplace { object: box_, path: rectangle(10, 10).into() })
             .expect("params");
         assert!(session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).is_err());
-        let value = serde_json::to_value(ObjectCollapse { object: cube }).expect("params");
+        let value = serde_json::to_value(ObjectCollapse { object: box_ }).expect("params");
         session.dispatch(OBJECT_COLLAPSE_ID, &value).expect("a primitive collapses to its derived mesh");
         assert!(session.dispatch(OBJECT_COLLAPSE_ID, &value).is_err(), "a baked mesh cannot collapse again");
 
@@ -1334,18 +1331,18 @@ mod tests {
     #[test]
     fn a_path_replace_on_a_mesh_object_is_refused_without_mutating() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let cube = session
-            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &cube_params(&session, Length::from_millimetres(10).expect("size")))
-            .expect("a cube")
+        let box_ = session
+            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &box_params(&session))
+            .expect("a box")
             .created_id()
             .expect("id");
         let value =
-            serde_json::to_value(ObjectPathReplace { object: cube, path: l_path(100) }).expect("params serialize");
+            serde_json::to_value(ObjectPathReplace { object: box_, path: l_path(100) }).expect("params serialize");
         let spec = CommandRegistry::new().get(OBJECT_PATH_REPLACE_ID).expect("registered");
         assert!(!spec.enabled(&session, &value));
         assert!(session.dispatch(OBJECT_PATH_REPLACE_ID, &value).is_err());
 
-        assert_eq!(session.project().revision().get(), 1, "the cube's own revision is the only one");
-        assert!(session.project().object_path(cube).is_err(), "a mesh object stores no drawing");
+        assert_eq!(session.project().revision().get(), 1, "the box's own revision is the only one");
+        assert!(session.project().object_path(box_).is_err(), "a mesh object stores no drawing");
     }
 }

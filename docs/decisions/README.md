@@ -95,7 +95,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0088](0088-origin-and-pivot-are-different-points.md) | Origin and pivot are different points | Accepted; refines 0026 and 0082, settles 0083 |
 | [0089](0089-three-palettes-are-data-and-derive-their-states.md) | Three palettes are data: one ramp per variant, derived states, one accent override | Accepted |
 | [0090](0090-icons-are-coloured-by-semantic-family.md) | An icon is coloured by its semantic family, and the theme maps the literal | Accepted; supersedes the one-ink clause of 0047 and 0055 |
-| [0091](0091-the-ribbon-is-one-const-map.md) | The ribbon is one const map, and one tool is one glyph in a 34 x 30 cell | Accepted; supersedes the cell metrics and the caption rule of 0067; fields removed by its amendment |
+| [0091](0091-the-ribbon-is-one-const-map.md) | The ribbon is one const map, and one tool is one glyph in a 34 x 30 cell | Accepted; supersedes the cell metrics and the caption rule of 0067; fields removed by its first amendment, a split cell made a cell plus its caret by the second |
 | [0092](0092-a-field-is-a-number-with-its-unit-outside.md) | A numeric field is a number with its unit outside, and one edit is one undo entry | Accepted |
 | [0093](0093-a-preview-fills-a-session-overlay.md) | A previewing operation fills a session overlay, not the document, and one command bar applies it | Accepted |
 | [0094](0094-a-class-registry-gives-the-machine-its-semantics.md) | A class registry gives the machine its semantics; the code identifies, the traits decide | Accepted; supersedes the registry role and top-level grouping of 0035 |
@@ -110,6 +110,13 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0103](0103-one-probe-serves-the-niche-the-distances-and-the-move.md) | One probe serves the niche, the distances and the move | Accepted; refines 0099 and 0102 |
 | [0104](0104-a-ghost-of-a-missing-node-is-shell-paint.md) | A ghost of a missing node is shell paint, not the overlay | Accepted; narrows 0093 |
 | [0104](0104-supply-names-four-sources.md) | Supply names four sources, and a product is assembled | Accepted; amends the trait list of 0094 |
+| [0105](0105-a-panel-stance-is-the-flat-frame-turned.md) | A panel stance is the flat frame turned, never mirrored | Accepted |
+| [0106](0106-a-niche-is-a-convex-cell-of-wall-planes.md) | A niche is a convex cell of wall planes | Accepted; refines 0099 and 0103; coverage clause superseded by 0109 |
+| [0107](0107-an-end-bevel-is-an-angle-about-its-edge.md) | An end bevel is an angle about its outline edge | Accepted |
+| [0108](0108-a-shaped-fill-bevels-its-ends-onto-the-walls.md) | A shaped fill bevels its ends onto the walls, and turns the board when it must | Accepted; refines 0105 and 0107; its two refusals are superseded by 0109 |
+| [0109](0109-a-niche-is-bounded-by-the-faces-the-pointer-sees.md) | A niche is bounded by the faces the pointer sees | Accepted; supersedes the coverage clause of 0106 |
+| [0110](0110-one-fill-cell-and-its-build-method.md) | One fill cell, and its build method in the cell's own list | Accepted; refines 0106 and the ribbon list of U74 |
+| [0111](0111-a-guide-is-one-amber-in-screen-space.md) | A guide is one amber, drawn in screen space | Accepted; derives the ink of 0089 and the frame inks of 0087 |
 
 ## Format
 

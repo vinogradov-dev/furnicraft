@@ -305,7 +305,7 @@ messages! {
     SectionParameters = ["Parameters", "Параметры"],
     PrimitiveRefused = ["The primitive was refused: {}", "Примитив отклонён: {}"],
     FigureRefused = ["The figure was refused: {}", "Фигура отклонена: {}"],
-    FieldEdge = ["Edge", "Ребро"],
+    FieldDepth = ["Depth", "Глубина"],
     FieldBands = ["Bands", "Полосы"],
     SectionMeshEditing = ["Mesh editing", "Редактирование сетки"],
     CollapseBeforeEditing = [
@@ -423,6 +423,12 @@ messages! {
         "Изменяет кольцо в области просмотра. Отмена вернёт прежнее."
     ],
     SectionBowedEdges = ["Bowed edges", "Изогнутые кромки"],
+    SectionBevels = ["End bevels", "Скосы торцов"],
+    NoBevelledEnds = ["This outline has no straight edge to bevel.", "В этом контуре нет прямой кромки для скоса."],
+    BevelAngleHint = [
+        "The end face tilts by this angle across the thickness; 0 to 89°.",
+        "Торец наклоняется на этот угол по толщине; от 0 до 89°."
+    ],
     CornerWith = ["Corner {}", "Угол {}"],
     Inward = ["in", "внутрь"],
     Outward = ["out", "наружу"],
@@ -638,7 +644,7 @@ messages! {
     TreeBadgeMesh = ["mesh", "сетка"],
     TreeBadgeContour = ["contour", "контур"],
     TreeBadgePath = ["path", "путь"],
-    TreeBadgeCube = ["cube", "куб"],
+    TreeBadgeBox = ["box", "блок"],
     TreeBadgeCylinder = ["cylinder", "цилиндр"],
     TreeBadgeSphere = ["sphere", "сфера"],
     TreeGroupSelection = ["Group selection", "Сгруппировать выделение"],
@@ -727,6 +733,16 @@ messages! {
     PivotNotEditable = ["The stored pivot is not editable.", "Сохранённый пивот нельзя редактировать."],
     Center = ["Center", "Центр"],
 
+    // ── Exact-distance fields ───────────────────────────────────────────────
+    DistanceCentred = ["Centred", "По центру"],
+    DistanceNoNeighbour = ["No surface in this direction", "В этом направлении нет поверхности"],
+    DistanceOutOfVoid = ["The distance does not fit the void", "Расстояние не помещается в пустоту"],
+    DistanceLockedFace = [
+        "The opposite face is locked; this distance would resize the part",
+        "Противоположная грань закреплена: это расстояние изменит размер детали"
+    ],
+    DistanceLocked = ["Locked at {} mm", "Закреплено: {} мм"],
+
     // ── Home ────────────────────────────────────────────────────────────────
     HomeClose = ["Close  (Esc)", "Закрыть  (Esc)"],
     HomeStartScene = ["Start a scene", "Начните сцену"],
@@ -808,6 +824,10 @@ messages! {
     FillNeedsProduct = ["Open a product first", "Сначала откройте изделие"],
     FillNeedsMaterial = ["Add a panel material first", "Сначала добавьте материал панели"],
     FillNeedsFillTrait = ["This class does not fill a void", "Этот класс не заполняет пустоту"],
+    FillMethod = ["{}: {}", "{}: {}"],
+    FillMethodFit = ["Largest rectangle", "Наибольший прямоугольник"],
+    FillMethodShape = ["Niche shape", "По форме ниши"],
+    SectionFillMethod = ["Build method", "Способ построения"],
     GroupObjects = ["Objects", "Объекты"],
     GroupViews = ["Views", "Виды"],
     GroupMaterials = ["Materials", "Материалы"],
@@ -818,6 +838,7 @@ messages! {
 
     // The ribbon's tools (U68); a planned row is named here before its command exists.
     ToolProductFrame = ["Product frame", "Каркас изделия"],
+    ToolProductFrameDraw = ["Frame by drawing", "Каркас по чертежу"],
     ToolPanel = ["Panel", "Панель"],
     ToolPost = ["Post", "Стойка"],
     ToolShelf = ["Shelf", "Полка"],
@@ -851,7 +872,7 @@ messages! {
     ToolRevolve = ["Revolve", "Вращение"],
     ToolLoft = ["Loft", "По сечениям"],
     ToolSweep = ["Sweep", "По траектории"],
-    ToolCube = ["Cube", "Куб"],
+    ToolBox = ["Box", "Блок"],
     ToolCylinder = ["Cylinder", "Цилиндр"],
     ToolSphere = ["Sphere", "Сфера"],
     ToolCone = ["Cone", "Конус"],
@@ -934,6 +955,9 @@ messages! {
     ExtrudePathOpen = ["The selected path is open; close it first", "Выбранный путь разомкнут; сначала замкните его"],
     ExtrudeNotPath = ["The selected object is not a path", "Выбранный объект не является путём"],
     PrimitiveClickPlane = ["{}: click the work plane", "{}: щёлкните по рабочей плоскости"],
+    PrimitiveDrawBase = ["{}: draw its base on the work plane", "{}: начертите основание на рабочей плоскости"],
+    BoxHeight = ["Box height", "Высота блока"],
+    FrameHeight = ["Frame height", "Высота каркаса"],
 
     // ── Display names ───────────────────────────────────────────────────────
     Axonometric = ["Axonometric", "Аксонометрия"],
@@ -1096,6 +1120,8 @@ messages! {
     CmdClearCornerFeature = ["Clear corner feature", "Убрать обработку угла"],
     CmdSetEdgeBow = ["Set edge bow", "Задать прогиб кромки"],
     CmdClearEdgeBow = ["Clear edge bow", "Убрать прогиб кромки"],
+    CmdSetBevel = ["Set end bevel", "Задать скос торца"],
+    CmdClearBevel = ["Clear end bevel", "Убрать скос торца"],
     CmdAddMachining = ["Add machining", "Добавить обработку"],
     CmdUpdateMachining = ["Update machining", "Изменить обработку"],
     CmdRemoveMachining = ["Remove machining", "Удалить обработку"],

@@ -89,7 +89,15 @@ impl Fact {
 pub(crate) fn report(root: &Path, config: &Config, global: &Global, args: &[String]) -> Result<(), String> {
     let flags = Flags::parse(args)?;
     let summary = crate::check(root).map_err(super::violations)?;
-    let id = flags.id.clone().unwrap_or_else(|| summary.state.task.clone());
+    let Some(id) = flags.id.clone().or_else(|| summary.state.current().map(str::to_owned)) else {
+        // Nothing is scheduled, so the report a session needs is the plan itself: the session-start
+        // block names the parked work and the empty order in one place.
+        match flags.form {
+            Form::Human => print!("{}", crate::status::render_with_detail(&summary, None)),
+            Form::Markdown | Form::Paths => {}
+        }
+        return Ok(());
+    };
     let view = crate::task_view_with(root, &id, &ProcessGit::new(root)).map_err(super::violations)?;
     let facts = facts(root, &view);
     let decisions = decisions(root, config, &view);
