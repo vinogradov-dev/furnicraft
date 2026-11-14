@@ -1033,6 +1033,27 @@ mod tests {
     }
 
     #[test]
+    fn a_splayed_case_under_a_short_top_offers_every_build() {
+        // The owner's case: two boards turned in the product frame and a top that does not reach
+        // the open front. Every build must answer instead of refusing the void (ADR 0109).
+        let (mut project, product) = splayed_product();
+        let top = PanelNominalSize::new(millimetres(600), millimetres(400)).expect("a short top");
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(0), millimetres(0), millimetres(702))
+            .expect("a top placement");
+        project.add_panel(product, "Top", top, None, millimetres(18), placement).expect("add a top");
+        let thickness = millimetres(18);
+        for fill in [Fill::WidthAndDepth, Fill::HeightAndDepth] {
+            for mode in [FillMode::Fit, FillMode::Shape] {
+                let planned = plan(&project, product, fill, mode, thickness)
+                    .unwrap_or_else(|refusal| panic!("{fill:?}/{mode:?} refused: {refusal:?}"));
+                assert!(planned.corners.len() >= 3, "{fill:?}/{mode:?} has a footprint");
+                assert!(planned.nominal_size.length().millimetres_f64() > 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn a_trapezoid_fits_the_largest_rectangle_and_takes_its_ring_as_the_shape() {
         let (project, product) = splayed_product();
         let thickness = millimetres(18);
