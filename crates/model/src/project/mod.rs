@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod camera_light_cmds;
 mod error;
+mod fill;
 #[cfg(test)]
 mod frame_contract;
 mod move_query;
@@ -25,6 +26,7 @@ mod surface;
 mod wire;
 
 pub use error::ProjectError;
+pub use fill::{FillMode, FillPlan, FillRefusal, free_axis};
 pub use move_query::{MoveAxis, MoveLimit, MoveRule};
 pub use niche::{Niche, NichePlane, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit};
 pub use surface::SurfaceKind;

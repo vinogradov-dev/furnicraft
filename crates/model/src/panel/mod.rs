@@ -92,6 +92,14 @@ impl PanelOutline {
     pub fn has_contour_features(&self) -> bool {
         !self.corner_features().is_empty() || !self.edge_bows().is_empty()
     }
+
+    /// The stored ring of a contour outline, or `None` when the outline is generated.
+    pub const fn contour(&self) -> Option<&Contour> {
+        match self {
+            Self::Contour { contour } => Some(contour),
+            Self::Rect { .. } => None,
+        }
+    }
 }
 
 /// A flat panel in the product tree.

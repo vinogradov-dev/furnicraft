@@ -78,8 +78,8 @@ pub use primitive::{
     MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
 };
 pub use project::{
-    MoveAxis, MoveLimit, MoveRule, Niche, NichePlane, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit, Project,
-    ProjectError, SurfaceKind,
+    FillMode, FillPlan, FillRefusal, MoveAxis, MoveLimit, MoveRule, Niche, NichePlane, NicheRefusal, NicheShape, Probe,
+    ProbeFace, ProbeHit, Project, ProjectError, SurfaceKind, free_axis,
 };
 pub use properties::{
     Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT, SYSTEM_PROTOTYPE_ID,
