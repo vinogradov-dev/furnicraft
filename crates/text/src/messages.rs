@@ -423,6 +423,12 @@ messages! {
         "Изменяет кольцо в области просмотра. Отмена вернёт прежнее."
     ],
     SectionBowedEdges = ["Bowed edges", "Изогнутые кромки"],
+    SectionBevels = ["End bevels", "Скосы торцов"],
+    NoBevelledEnds = ["This outline has no straight edge to bevel.", "В этом контуре нет прямой кромки для скоса."],
+    BevelAngleHint = [
+        "The end face tilts by this angle across the thickness; 0 to 89°.",
+        "Торец наклоняется на этот угол по толщине; от 0 до 89°."
+    ],
     CornerWith = ["Corner {}", "Угол {}"],
     Inward = ["in", "внутрь"],
     Outward = ["out", "наружу"],
