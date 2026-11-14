@@ -219,7 +219,9 @@ pub const BEVEL_SET_LABEL: Message = Message::CmdSetBevel;
 ///
 /// The source is an outline edge — a rectangle edge or a ring segment — and the angle tilts the
 /// end face across the thickness about that edge's line. A positive angle removes material; the
-/// outline on face `B` is untouched, so the nominal size stays the stock size.
+/// outline on face `B` is untouched, so the nominal size stays the stock size. The command follows
+/// the class's contour trait, because a beveled end is an outline edit, and the card's shape section
+/// is gated by the same trait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelBevelSet {
@@ -254,12 +256,14 @@ fn bevel_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(bevel) = params.bevel() else {
         return false;
     };
-    session.project().validate_panel_bevel(params.panel, bevel).is_ok()
+    class_allows_contour(session.project(), params.panel, BEVEL_SET_ID).is_ok()
+        && session.project().validate_panel_bevel(params.panel, bevel).is_ok()
 }
 
 fn bevel_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelBevelSet::parse(params)?;
     let bevel = params.bevel()?;
+    class_allows_contour(project, params.panel, BEVEL_SET_ID)?;
     project.set_panel_bevel(params.panel, bevel)?;
     Ok(CommandOutcome::changed())
 }
