@@ -40,6 +40,24 @@ been reproduced. Taking it moves the line into `## Now` at its place in the work
 name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
+- `[ ]` **N13** the fill cell has one panel kind and a visible build method
+  Why: The owner reports that the empty-space tool's menu reads like a choice between two
+   panels: the Shape row has no icon and, after picking it, the cell keeps showing the pinned
+   Fit, so the choice looks like it did not take. He asks for one panel whose build method
+   lives in a secondary menu, with a visible selected state.
+  Shape: Keep one cell per panel kind (post, shelf). Put both build methods under a 'Build
+   method' caption in the cell's own method list, give the shape row the polygon glyph, and
+   always draw the tool's glyph on the cell face so the mode never becomes a second panel.
+   While a mode is armed the face shows that method, pressed, with its own hint and its own
+   action (a second click drops the tool); the pinned row keeps marking the workspace default.
+   Rename the rows 'Largest rectangle' and 'Niche shape' / 'Наибольший прямоугольник' and 'По
+   форме ниши'. Record the decision in an ADR.
+  Done: Tests: both fill methods carry a glyph and the build caption; the open list draws the
+   caption and both rows; the armed shape is shown on the cell while Fit is pinned, keeps the
+   post glyph and its click toggles the armed mode; the face keeps the tool glyph for both
+   rows; the existing pin and language tests pass; cargo xtask ci is green.
+  `files: crates/ui/src/toolbars/spec.rs,crates/ui/src/toolbars.rs,crates/ui/src/toolbars/ready.rs,crates/text/src/messages.rs`
+
 ## Bugs
 ## Next
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
@@ -110,6 +128,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
 ## Done
+
+- `[x]` **N14** the niche is bounded by the faces the pointer sees, not by the envelope
+  Why: The owner reports that N9-N12 do not deliver the behaviour: turned panels still blind
+   the pointer, an empty carcass with a top that covers only part of the frame is refused ('the
+   empty space here is not one straight shape'), and pointing at empty space through a
+   world-bounds corner of a turned product answers 'point at the empty space inside the open
+   product'. The pointer also gets no say in what it points at: the shell intersects the ray
+   with the world-axis box around the product envelope, then hands the niche that entry point,
+   and the niche refuses any wall plane that does not cover a whole face of the envelope.
+  Shape: Measure from the face the pointer points at: enter the product's own envelope (never
+   its world bounds), probe along the view ray to the first surface, and place the measured
+   point a micrometre in front of that face; a ray that meets only the far envelope keeps the
+   entry point. Let the face plane bound the cell and drop the whole-face coverage requirement,
+   so a wall that stops halfway or a top that covers part of the case still leaves a niche;
+   keep holds_body for a surface standing inside the cell. Make Shape fall back to the slab cut
+   with no end bevels when the wall planes cannot all be met by one flat end face, instead of
+   refusing. Record the changed rule in ADR 0109 and mark 0106's coverage clause superseded.
+  Done: Tests: a pointer on a wall's inner face measures from that face and the ghost ends at
+   it; a turned product is entered through its own box and a ray through the old world-bounds
+   corner answers nothing; a niche under a short top and between short walls still fills; a
+   wall that stops halfway still yields a full-height niche beside it; Shape under a leaned
+   ceiling takes the slab section with no bevels instead of refusing; the splayed and box fills
+   keep their answers; the shell's one-click-one-undo tests pass with the ghost captured on the
+   press; cargo xtask ci is green.
+  `files: crates/model/src/project/niche.rs,crates/model/src/project/fill.rs,apps/furnicraft/src/fill_gizmo.rs,apps/furnicraft/src/document.rs,docs/domain/products.md,docs/decisions/README.md` — `9773ddc`
 
 - `[x]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
   Why: This is the point of the bevel: once a part takes the niche's shape, a shelf or a post
