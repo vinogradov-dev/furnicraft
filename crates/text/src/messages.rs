@@ -1113,6 +1113,8 @@ messages! {
     CmdClearCornerFeature = ["Clear corner feature", "Убрать обработку угла"],
     CmdSetEdgeBow = ["Set edge bow", "Задать прогиб кромки"],
     CmdClearEdgeBow = ["Clear edge bow", "Убрать прогиб кромки"],
+    CmdSetBevel = ["Set end bevel", "Задать скос торца"],
+    CmdClearBevel = ["Clear end bevel", "Убрать скос торца"],
     CmdAddMachining = ["Add machining", "Добавить обработку"],
     CmdUpdateMachining = ["Update machining", "Изменить обработку"],
     CmdRemoveMachining = ["Remove machining", "Удалить обработку"],

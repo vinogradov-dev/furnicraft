@@ -1,6 +1,7 @@
 //! Document commands for a panel, in the three areas its data divides into.
 //!
-//! `panel.rs` holds the panel itself — creation, stored outline, name, nominal size, material;
+//! `panel.rs` holds the panel itself — creation, stored outline, name, nominal size, material, end
+//! bevel;
 //! `machining.rs` its machining records; `banding.rs` the edge and corner trims of its outline.
 //! This module holds no command: it declares the areas and re-exports every id, label, parameter
 //! type and spec, so the registry and the UI keep reaching a command through `panel_cmds`.
@@ -33,12 +34,15 @@ pub use machining::{
 };
 pub use machining::{PanelMachiningAdd, PanelMachiningMove, PanelMachiningRemove, PanelMachiningUpdate};
 
-pub(crate) use panel::{CONTOUR_CREATE, CREATE, MATERIAL_SET, OUTLINE_CONTOUR, OUTLINE_SET, RENAME, RESIZE};
-pub use panel::{
-    CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, CREATE_ID, CREATE_LABEL, MATERIAL_SET_ID, MATERIAL_SET_LABEL,
-    OUTLINE_CONTOUR_ID, OUTLINE_CONTOUR_LABEL, OUTLINE_SET_ID, OUTLINE_SET_LABEL, RENAME_ID, RENAME_LABEL, RESIZE_ID,
-    RESIZE_LABEL,
+pub(crate) use panel::{
+    BEVEL_CLEAR, BEVEL_SET, CONTOUR_CREATE, CREATE, MATERIAL_SET, OUTLINE_CONTOUR, OUTLINE_SET, RENAME, RESIZE,
 };
 pub use panel::{
-    PanelContourCreate, PanelCreate, PanelMaterialSet, PanelOutlineSet, PanelOutlineToContour, PanelRename, PanelResize,
+    BEVEL_CLEAR_ID, BEVEL_CLEAR_LABEL, BEVEL_SET_ID, BEVEL_SET_LABEL, CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL,
+    CREATE_ID, CREATE_LABEL, MATERIAL_SET_ID, MATERIAL_SET_LABEL, OUTLINE_CONTOUR_ID, OUTLINE_CONTOUR_LABEL,
+    OUTLINE_SET_ID, OUTLINE_SET_LABEL, RENAME_ID, RENAME_LABEL, RESIZE_ID, RESIZE_LABEL,
+};
+pub use panel::{
+    PanelBevelClear, PanelBevelSet, PanelContourCreate, PanelCreate, PanelMaterialSet, PanelOutlineSet,
+    PanelOutlineToContour, PanelRename, PanelResize,
 };

@@ -15,10 +15,10 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{
-    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, Panel, PanelNominalSize, PanelOutline, Placement,
-    Project, ProjectError, PropertyValue, SYSTEM_CLASS,
+    Catalog, ClassCode, Contour, EdgeBevel, EdgeRef, Id, Level, MaterialId, Operation, Panel, PanelNominalSize,
+    PanelOutline, Placement, Project, ProjectError, PropertyValue, SYSTEM_CLASS,
 };
-use furnicraft_units::Length;
+use furnicraft_units::{Degrees, Length};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -207,6 +207,101 @@ fn contour_create_run(
         placement,
     )?;
     Ok(CommandOutcome::created(id))
+}
+
+/// Stable id of the end-bevel command.
+pub const BEVEL_SET_ID: &str = "panel.bevel.set";
+
+/// User-facing label of the end-bevel command.
+pub const BEVEL_SET_LABEL: Message = Message::CmdSetBevel;
+
+/// Parameters for `panel.bevel.set`.
+///
+/// The source is an outline edge — a rectangle edge or a ring segment — and the angle tilts the
+/// end face across the thickness about that edge's line. A positive angle removes material; the
+/// outline on face `B` is untouched, so the nominal size stays the stock size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelBevelSet {
+    /// Id of the panel whose end is beveled.
+    pub panel: Id,
+    /// The outline edge the end face tilts about.
+    pub source: EdgeRef,
+    /// The tilt across the thickness, in millidegrees.
+    pub angle: Degrees,
+}
+
+impl PanelBevelSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: BEVEL_SET_ID, message: error.to_string() })
+    }
+
+    fn bevel(&self) -> Result<EdgeBevel, CommandError> {
+        EdgeBevel::new(self.source, self.angle)
+            .map_err(|error| CommandError::InvalidParams { command: BEVEL_SET_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.bevel.set` command.
+pub(crate) const BEVEL_SET: CommandSpec =
+    CommandSpec::new(BEVEL_SET_ID, BEVEL_SET_LABEL, bevel_set_enabled, bevel_set_run);
+
+fn bevel_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelBevelSet::parse(params) else {
+        return false;
+    };
+    let Ok(bevel) = params.bevel() else {
+        return false;
+    };
+    session.project().validate_panel_bevel(params.panel, bevel).is_ok()
+}
+
+fn bevel_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelBevelSet::parse(params)?;
+    let bevel = params.bevel()?;
+    project.set_panel_bevel(params.panel, bevel)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the end-bevel clear command.
+pub const BEVEL_CLEAR_ID: &str = "panel.bevel.clear";
+
+/// User-facing label of the end-bevel clear command.
+pub const BEVEL_CLEAR_LABEL: Message = Message::CmdClearBevel;
+
+/// Parameters for `panel.bevel.clear`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelBevelClear {
+    /// Id of the panel whose end bevel is removed.
+    pub panel: Id,
+    /// The outline edge to clear.
+    pub source: EdgeRef,
+}
+
+impl PanelBevelClear {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: BEVEL_CLEAR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.bevel.clear` command.
+pub(crate) const BEVEL_CLEAR: CommandSpec =
+    CommandSpec::new(BEVEL_CLEAR_ID, BEVEL_CLEAR_LABEL, bevel_clear_enabled, bevel_clear_run);
+
+fn bevel_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelBevelClear::parse(params) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some_and(|panel| panel.bevel_at(params.source).is_some())
+}
+
+fn bevel_clear_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelBevelClear::parse(params)?;
+    project.clear_panel_bevel(params.panel, params.source)?;
+    Ok(CommandOutcome::changed())
 }
 
 /// The parent-frame placement that puts the new panel exactly over its source.
@@ -542,4 +637,114 @@ fn material_set_run(project: &mut Project, catalog: &Catalog, params: &Value) ->
         catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
     project.set_panel_material(params.panel, params.material, material.nominal_thickness())?;
     Ok(CommandOutcome::changed())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use furnicraft_model::{RectEdge, Revision};
+    use furnicraft_testkit::{sample_catalog, sample_project};
+    use serde_json::Value;
+
+    use crate::commands::{CommandError, CommandRegistry};
+    use crate::session::Session;
+
+    use super::*;
+
+    fn session() -> Session {
+        Session::with_catalog(sample_project(), sample_catalog())
+    }
+
+    fn params<T: serde::Serialize>(value: &T) -> Value {
+        serde_json::to_value(value).expect("params serialize")
+    }
+
+    fn panel_id() -> Id {
+        Id::new(2).expect("the sample panel")
+    }
+
+    fn set(angle: i64) -> PanelBevelSet {
+        PanelBevelSet {
+            panel: panel_id(),
+            source: EdgeRef::Rect { edge: RectEdge::Bottom.id() },
+            angle: Degrees::from_millidegrees(angle),
+        }
+    }
+
+    #[test]
+    fn one_bevel_command_is_one_undo_entry() {
+        let mut session = session();
+        let registry = CommandRegistry::new();
+        let request = set(45_000);
+        let spec = registry.get(BEVEL_SET_ID).expect("registered");
+        assert!(spec.enabled(&session, &params(&request)), "the sample panel takes a bevel");
+        assert_eq!(session.project().revision(), Revision::ZERO);
+
+        session.dispatch(BEVEL_SET_ID, &params(&request)).expect("set the bevel");
+        assert_eq!(session.project().revision().get(), 1);
+        let panel = session.project().panel(panel_id()).expect("panel");
+        assert_eq!(panel.bevels().len(), 1);
+
+        session.undo().expect("undo the bevel");
+        assert!(session.project().panel(panel_id()).expect("panel").bevels().is_empty());
+        session.redo().expect("redo the bevel");
+        assert_eq!(session.project().panel(panel_id()).expect("panel").bevels().len(), 1);
+
+        let clear = PanelBevelClear { panel: panel_id(), source: request.source };
+        assert!(
+            registry.get(BEVEL_CLEAR_ID).expect("registered").enabled(&session, &params(&clear)),
+            "a beveled edge can be cleared"
+        );
+        session.dispatch(BEVEL_CLEAR_ID, &params(&clear)).expect("clear the bevel");
+        assert!(session.project().panel(panel_id()).expect("panel").bevels().is_empty());
+        assert!(!registry.get(BEVEL_CLEAR_ID).expect("registered").enabled(&session, &params(&clear)));
+        assert_eq!(
+            session.dispatch(BEVEL_CLEAR_ID, &params(&clear)),
+            Err(CommandError::Model(ProjectError::BevelNotFound { panel: panel_id(), on: request.source }))
+        );
+    }
+
+    #[test]
+    fn a_command_refuses_an_impossible_angle_a_banded_edge_and_a_missing_panel() {
+        let mut session = session();
+        let registry = CommandRegistry::new();
+        let spec = registry.get(BEVEL_SET_ID).expect("registered");
+
+        // The cap is a parameter error, not a model refusal: the record cannot hold the value.
+        for angle in [0, 89_000, -10_000] {
+            let request = set(angle);
+            assert!(!spec.enabled(&session, &params(&request)), "angle {angle} is not a bevel");
+            assert!(matches!(
+                session.dispatch(BEVEL_SET_ID, &params(&request)),
+                Err(CommandError::InvalidParams { command: BEVEL_SET_ID, .. })
+            ));
+        }
+
+        // A banded edge has no square face left, and the band is what says so.
+        session
+            .dispatch(
+                "panel.edge_banding.set",
+                &params(&crate::panel_cmds::PanelEdgeBandingSet {
+                    panel: panel_id(),
+                    edge: RectEdge::Bottom.id(),
+                    material: furnicraft_testkit::sample_edge_material_id(),
+                    included_in_size: false,
+                }),
+            )
+            .expect("band the bottom edge");
+        let request = set(45_000);
+        assert!(!spec.enabled(&session, &params(&request)));
+        assert_eq!(
+            session.dispatch(BEVEL_SET_ID, &params(&request)),
+            Err(CommandError::Model(ProjectError::BevelOnBandedEdge { panel: panel_id(), on: request.source }))
+        );
+
+        // A panel that is not in the project is refused before anything else.
+        let missing = PanelBevelSet { panel: Id::new(99).expect("id"), ..set(45_000) };
+        assert_eq!(
+            session.dispatch(BEVEL_SET_ID, &params(&missing)),
+            Err(CommandError::Model(ProjectError::PanelNotFound { id: missing.panel }))
+        );
+    }
 }

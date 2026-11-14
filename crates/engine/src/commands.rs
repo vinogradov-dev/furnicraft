@@ -172,6 +172,8 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CORNER_CLEAR,
     panel_cmds::BOW_SET,
     panel_cmds::BOW_CLEAR,
+    panel_cmds::BEVEL_SET,
+    panel_cmds::BEVEL_CLEAR,
     panel_cmds::MACHINING_ADD,
     panel_cmds::MACHINING_UPDATE,
     panel_cmds::MACHINING_REMOVE,
@@ -343,6 +345,12 @@ mod tests {
         let bow_clear = registry.get("panel.bow.clear").expect("panel.bow.clear is registered");
         assert_eq!(bow_clear.id(), "panel.bow.clear");
         assert_eq!(bow_clear.label().text(Lang::En), "Clear edge bow");
+        let bevel_set = registry.get("panel.bevel.set").expect("panel.bevel.set is registered");
+        assert_eq!(bevel_set.id(), "panel.bevel.set");
+        assert_eq!(bevel_set.label().text(Lang::En), "Set end bevel");
+        let bevel_clear = registry.get("panel.bevel.clear").expect("panel.bevel.clear is registered");
+        assert_eq!(bevel_clear.id(), "panel.bevel.clear");
+        assert_eq!(bevel_clear.label().text(Lang::En), "Clear end bevel");
         let add = registry.get("panel.machining.add").expect("panel.machining.add is registered");
         assert_eq!(add.id(), "panel.machining.add");
         assert_eq!(add.label().text(Lang::En), "Add machining");
@@ -434,7 +442,7 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label().text(Lang::En), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 54);
+        assert_eq!(registry.specs().len(), 56);
     }
 
     #[test]
