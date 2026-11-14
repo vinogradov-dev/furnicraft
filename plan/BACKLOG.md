@@ -109,45 +109,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
-- `[ ]` **N9** the niche is a convex cell of wall planes, so boards turned in space are measured
-  Why: The owner reports that a niche bounded by panels turned out of the vertical gives no
-   size and no shape, so neither a post nor a shelf is built; the N7 trapezoid only works when
-   every side board stands plumb. Measured on this tree: a back wall leaned 15 degrees answers
-   `NicheRefusal::Unrepresentable` at every cursor height, a ceiling leaned 10 degrees is
-   measured at the cursor alone (696, 651 and 605 mm of height at y = 20, 280 and 540, so a
-   shelf would cut into it), and a product turned 45 degrees is refused with
-   `NicheRefusal::Turned` although the section is taken in the product's own frame. The cause
-   is the N7 query: four rays along the product's axes are cut with the section plane at the
-   cursor's height and the result is extruded along the height, which is exact only while every
-   wall is vertical and the floor and ceiling are horizontal.
-  Shape: The free space is the intersection of half-spaces. `Project::niche` builds a convex
-   cell in the product's frame: it starts from the envelope's six planes, probes from the point
-   along every current face normal and every cell vertex (plus the envelope's 26 axis, edge and
-   corner directions in the first round), clips the cell by each met face's plane, and repeats
-   until a round adds no plane, with a capped loop that refuses instead of spinning. Each
-   face's plane must still be a surface over the face's extent, which is the current `covered`
-   check run at every face vertex and at the face's middle rather than only at the void's floor
-   and ceiling; no other surface's box corner may lie strictly inside the cell, which is what
-   refuses a void that holds an obstacle, a notch, or two boards meeting halfway. The query
-   reports the product frame's supporting planes (unit free-side normal and offset) and the
-   cell's vertices; `local_min` and `size` stay the box around the cell for the callouts, and a
-   turned product is measured in its own frame, so the `Turned` refusal is deleted. The fill
-   keeps building a board that fits: a shelf takes the cell's section clipped over its
-   thickness, each wall's half-plane evaluated at the far face, as a rectangle or a contour,
-   and a post takes the same section in its own board plane (the panel's local XY against the
-   product's ZY), so a splayed case offers a post again with the depth the slab really has. The
-   box cases answer exactly as they do today. A curved boundary is measured by the box around
-   its body, which is conservative, so a part fits with a gap and never cuts in; an exact
-   curved section needs a surface query that can meet a curved face and is not part of this
-   task.
-  Done: Tests: a leaned wall gives a cell and a shelf that fits it; a leaned ceiling gives the
-   true height over its footprint, not the cursor's; a 45-degree turned product answers instead
-   of `Turned`; the splayed pair, the box, the shelf-split and the half-wall cases keep their
-   current answers, the half wall still refusing; a post stands in the splayed case with the
-   slab's depth; a body standing inside the cell is refused; the ghost equals the created panel
-   in every case; `cargo xtask ci` is green. A new ADR records the cell and the refusal of a
-   non-convex void, and `docs/domain/products.md` section 4 describes it.
-  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, docs/domain/products.md, docs/decisions/README.md`
 - `[ ]` **N10** the fill has two modes and prefers a standard panel when the section allows one
   Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
    without cutting in, or it takes the whole shape the walls allow. Today there is one shape
@@ -239,6 +200,46 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md`
 
 ## Done
+
+- `[x]` **N9** the niche is a convex cell of wall planes, so boards turned in space are measured
+  Why: The owner reports that a niche bounded by panels turned out of the vertical gives no
+   size and no shape, so neither a post nor a shelf is built; the N7 trapezoid only works when
+   every side board stands plumb. Measured on this tree: a back wall leaned 15 degrees answers
+   `NicheRefusal::Unrepresentable` at every cursor height, a ceiling leaned 10 degrees is
+   measured at the cursor alone (696, 651 and 605 mm of height at y = 20, 280 and 540, so a
+   shelf would cut into it), and a product turned 45 degrees is refused with
+   `NicheRefusal::Turned` although the section is taken in the product's own frame. The cause
+   is the N7 query: four rays along the product's axes are cut with the section plane at the
+   cursor's height and the result is extruded along the height, which is exact only while every
+   wall is vertical and the floor and ceiling are horizontal.
+  Shape: The free space is the intersection of half-spaces. `Project::niche` builds a convex
+   cell in the product's frame: it starts from the envelope's six planes, probes from the point
+   along every current face normal and every cell vertex (plus the envelope's 26 axis, edge and
+   corner directions in the first round), clips the cell by each met face's plane, and repeats
+   until a round adds no plane, with a capped loop that refuses instead of spinning. Each
+   face's plane must still be a surface over the face's extent, which is the current `covered`
+   check run at every face vertex and at the face's middle rather than only at the void's floor
+   and ceiling; no other surface's box corner may lie strictly inside the cell, which is what
+   refuses a void that holds an obstacle, a notch, or two boards meeting halfway. The query
+   reports the product frame's supporting planes (unit free-side normal and offset) and the
+   cell's vertices; `local_min` and `size` stay the box around the cell for the callouts, and a
+   turned product is measured in its own frame, so the `Turned` refusal is deleted. The fill
+   keeps building a board that fits: a shelf takes the cell's section clipped over its
+   thickness, each wall's half-plane evaluated at the far face, as a rectangle or a contour,
+   and a post takes the same section in its own board plane (the panel's local XY against the
+   product's ZY), so a splayed case offers a post again with the depth the slab really has. The
+   box cases answer exactly as they do today. A curved boundary is measured by the box around
+   its body, which is conservative, so a part fits with a gap and never cuts in; an exact
+   curved section needs a surface query that can meet a curved face and is not part of this
+   task.
+  Done: Tests: a leaned wall gives a cell and a shelf that fits it; a leaned ceiling gives the
+   true height over its footprint, not the cursor's; a 45-degree turned product answers instead
+   of `Turned`; the splayed pair, the box, the shelf-split and the half-wall cases keep their
+   current answers, the half wall still refusing; a post stands in the splayed case with the
+   slab's depth; a body standing inside the cell is refused; the ghost equals the created panel
+   in every case; `cargo xtask ci` is green. A new ADR records the cell and the refusal of a
+   non-convex void, and `docs/domain/products.md` section 4 describes it.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, docs/domain/products.md, docs/decisions/README.md` — `09a29e0`
 
 - `[x]` **X35** a post stands on the niche's ceiling, so its first corner is at the top and edge 1 is the top edge
   Why: The owner read the corner order off a created post and reported it upside down. The fill
