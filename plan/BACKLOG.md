@@ -109,38 +109,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
-- `[ ]` **N10** the fill has two modes and prefers a standard panel when the section allows one
-  Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
-   without cutting in, or it takes the whole shape the walls allow. Today there is one shape
-   and no choice, and a post or a shelf is measured only one way. He also asks the program to
-   decide whether the shape can be a standard panel with corner cuts or radii before it falls
-   back to a contour: a contour panel loses `panel.resize`, the rectangle card and its nominal
-   fields (ADR 0042), so the standard path is the one to prefer when it is exact.
-  Shape: `Project` answers one fill plan for the class's `Fill` pair, a material thickness and
-   a mode, and both modes start from the N9 section. Fit returns the largest rectangle with
-   sides on the panel's own axes that lies inside the section, computed exactly from the convex
-   polygon's breakpoints, as a nominal rectangle, and a rectangular section gives itself. Shape
-   returns the section as the panel outline. Before the panel is chosen, a classifier generates
-   the candidate rectangle rings and compares them with the section vertex by vertex within a
-   micrometre: the nominal rectangle stays `PanelOutline::Rect`; a rectangle with asymmetric
-   corner chamfers, the existing `CornerFeatureKind::Chamfer { incoming, outgoing }` with a
-   positive clear length left on every edge, becomes `Rect` with those features; a ring with
-   corner radii becomes `Rect` with `Radius` features; only a section that matches nothing is a
-   contour. The classifier is a pure model function over a ring, so the radius path is tested
-   directly even though the plane-only cell cannot produce an arc until a curved surface query
-   exists. The mode is a method of the fill cell through the ribbon's existing split list: the
-   primary method is Fit, the variant is Shape, the pinned method is the session's choice, and
-   `ToolAction::Fill` carries the mode into `FillArm`. The post and the shelf both offer both
-   modes, and the ghost, the distance fields and `panel.create` read the same plan. A section
-   that is degenerate, not convex, or has no rectangle of a usable size is refused with a
-   sentence.
-  Done: Tests: a trapezoid gives the largest rectangle in Fit and the trapezoid ring in Shape;
-   a plain box gives the same rectangle in both modes; the fit rectangle lies inside every wall
-   over the whole thickness; a rectangle with one asymmetric corner cut becomes `Rect` with one
-   chamfer; a rounded ring given to the classifier directly becomes a radius; a section whose
-   cut would consume an edge is a contour; the mode survives a tool switch and is the one the
-   ghost and the panel carry; a click is one undo entry; `cargo xtask ci` is green.
-  `files: crates/model/src/project/, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/fill.rs, crates/ui/src/editor/ribbon.rs, apps/furnicraft/src/document.rs, crates/text/src/messages.rs, docs/domain/products.md`
 - `[ ]` **N11** a panel's end can be given a bevel angle about its edge
   Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end
    face must lie in the wall's plane. The panel is one region extruded along its thickness, so
@@ -200,6 +168,39 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md`
 
 ## Done
+
+- `[x]` **N10** the fill has two modes and prefers a standard panel when the section allows one
+  Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
+   without cutting in, or it takes the whole shape the walls allow. Today there is one shape
+   and no choice, and a post or a shelf is measured only one way. He also asks the program to
+   decide whether the shape can be a standard panel with corner cuts or radii before it falls
+   back to a contour: a contour panel loses `panel.resize`, the rectangle card and its nominal
+   fields (ADR 0042), so the standard path is the one to prefer when it is exact.
+  Shape: `Project` answers one fill plan for the class's `Fill` pair, a material thickness and
+   a mode, and both modes start from the N9 section. Fit returns the largest rectangle with
+   sides on the panel's own axes that lies inside the section, computed exactly from the convex
+   polygon's breakpoints, as a nominal rectangle, and a rectangular section gives itself. Shape
+   returns the section as the panel outline. Before the panel is chosen, a classifier generates
+   the candidate rectangle rings and compares them with the section vertex by vertex within a
+   micrometre: the nominal rectangle stays `PanelOutline::Rect`; a rectangle with asymmetric
+   corner chamfers, the existing `CornerFeatureKind::Chamfer { incoming, outgoing }` with a
+   positive clear length left on every edge, becomes `Rect` with those features; a ring with
+   corner radii becomes `Rect` with `Radius` features; only a section that matches nothing is a
+   contour. The classifier is a pure model function over a ring, so the radius path is tested
+   directly even though the plane-only cell cannot produce an arc until a curved surface query
+   exists. The mode is a method of the fill cell through the ribbon's existing split list: the
+   primary method is Fit, the variant is Shape, the pinned method is the session's choice, and
+   `ToolAction::Fill` carries the mode into `FillArm`. The post and the shelf both offer both
+   modes, and the ghost, the distance fields and `panel.create` read the same plan. A section
+   that is degenerate, not convex, or has no rectangle of a usable size is refused with a
+   sentence.
+  Done: Tests: a trapezoid gives the largest rectangle in Fit and the trapezoid ring in Shape;
+   a plain box gives the same rectangle in both modes; the fit rectangle lies inside every wall
+   over the whole thickness; a rectangle with one asymmetric corner cut becomes `Rect` with one
+   chamfer; a rounded ring given to the classifier directly becomes a radius; a section whose
+   cut would consume an edge is a contour; the mode survives a tool switch and is the one the
+   ghost and the panel carry; a click is one undo entry; `cargo xtask ci` is green.
+  `files: crates/model/src/project/, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/fill.rs, crates/ui/src/editor/ribbon.rs, apps/furnicraft/src/document.rs, crates/text/src/messages.rs, docs/domain/products.md` — `114d79e`
 
 - `[x]` **N9** the niche is a convex cell of wall planes, so boards turned in space are measured
   Why: The owner reports that a niche bounded by panels turned out of the vertical gives no
