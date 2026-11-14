@@ -170,13 +170,25 @@ The maker's flow: open a product, choose “add a post” or “add a shelf”, 
 - The cursor ray meets the envelope's interior; the point defines the niche (§4).
 - A **post** takes the niche's height and the depth the void leaves it; a **shelf** takes its width and
   depth. Which axis pair a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`,
-  `None`). Each takes the cell's own cut at the board's thickness, so a shelf in a splayed case is a
-  contour panel with the trapezoid as its outline, and a post stands against a splayed wall with the
-  depth the slab really has (0106).
+  `None`). Each takes the cell's own cut at the board's thickness, so a post stands against a splayed
+  wall with the depth the slab really has (0106).
+- The part has **two modes**, chosen from the tool's own method list and remembered by the workspace:
+  - **Largest fit** is the default: the part is the largest rectangle, with its sides on the panel's
+    own axes, that lies inside the cut section. It always fits, and it always keeps the standard
+    rectangle panel — resize, card and nominal fields included.
+  - **Whole shape** makes the part the section itself. Before the panel is chosen, the program asks
+    whether a standard rectangle draws exactly that shape: the plain rectangle, a rectangle with
+    corner chamfers (asymmetric ones included) or one with corner radii. The candidates are
+    generated and compared with the measured ring vertex by vertex within a micrometre, so a shape
+    is never called standard on an approximation. Only a section no rectangle draws — the trapezoid
+    of two angled posts, a cut that consumes a whole edge — becomes a contour panel, which trades
+    `panel.resize` and the rectangle card for the exact shape (0042).
 - A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
   is written until the click.
 - The offset step is **1 mm**; there are no fractional sizes.
-- A click creates the part with exactly the ghost's size, through one command and one undo entry.
+- A click creates the part with exactly the ghost's size, outline and mode, through one command and
+  one undo entry: the outline — a rectangle with its corner cuts, or the ring — travels in the same
+  `panel.create`, so a shaped part is never a create followed by a second edit.
 - The two fills handle a product in any orientation, because the cell is measured in the product's own
   frame; a curved boundary is measured by the box around its body, so the part fits with a gap. A
   drawer, a back panel and a facade need their own fill rules.
