@@ -14,7 +14,8 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 [0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
 [0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md),
 [0045](../decisions/0045-machining-is-an-ordered-list-of-anchored-operations.md) and
-[0105](../decisions/0105-a-panel-stance-is-the-flat-frame-turned.md).
+[0105](../decisions/0105-a-panel-stance-is-the-flat-frame-turned.md) and
+[0107](../decisions/0107-an-end-bevel-is-an-angle-about-its-edge.md).
 
 ## 1. Terms
 
@@ -313,7 +314,43 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 - The flag belongs to the segment's banding record, not to the banding material.
 - Machining coordinates do not change when the flag changes: the machine works on the core, and the parametric layer applies the core origin when building the body and tools.
 
-## 6. Machining and cutouts
+## 6. End bevels
+
+A board that butts a wall turned in two planes cannot meet it with a square end: the end face has to
+lie in the wall's plane. The panel is one region extruded along its thickness, so every end face is
+perpendicular to the two large faces, and its outline cannot express the skew. The end bevel is the
+parameter that does (ADR 0107).
+
+- **Record.** `Panel` stores at most one `EdgeBevel` per outline edge. The source is a topology
+  reference — a rectangle `EdgeId` or a ring `ContourSegmentId` — plus a signed angle in
+  millidegrees. One angle about the edge's line determines the plane exactly; the edge line supplies
+  the rest, so no plane normal or offset is stored.
+- **Which face is the outline.** The outline is the edge on face `B` (`z = 0`). The end face tilts
+  across the thickness, so face `A`'s edge is set back by `thickness * tan(angle)` towards the middle
+  of the panel. A positive angle removes material; the body never grows past its outline, so the
+  nominal size stays the stock size. A negative angle is refused rather than unioned on: which face
+  is the reference is the shaped fill's choice, not an accident of the sign (N12).
+- **Accepted edges.** A straight segment only. A bowed edge and an arc are drawn as arcs, and an
+  arc's end face is a ruled surface, not a plane. The angle must be positive and below 89°, where the
+  setback would run away. The record also has to leave a far face: the core eroded by every bevel's
+  full setback must stay one positive piece.
+- **Banding.** A beveled edge cannot carry a band and a banded edge cannot be beveled. The band
+  follows the nominal edge and would hang in the air beside the tilted face, so the two records
+  exclude each other on the same source and each command says so.
+- **Geometry.** `param` folds one `PlanStep::Difference` per bevel after the core extrusion: a wedge
+  between the outline edge and the far edge, closed outside the panel on its other sides, extruded
+  along the segment with the tool overshoot. The core region, the analytic rectangle path, the
+  cutouts and the other edges' attachments are untouched. The cutter's plane sits one micrometre
+  outside the material, because a plane exactly through the panel's own edge is tangent to that edge
+  and the kernel answers such a cut with nothing; the difference is below the document's own
+  resolution.
+- **Lifetime.** The record travels with its topology source: `panel.outline.to_contour` moves a
+  rectangle edge's bevel onto the ring segment the edge became, and a ring edit that drops a beveled
+  segment is refused, exactly as it is for a banded one.
+- **Commands.** `panel.bevel.set` (panel, source, angle) and `panel.bevel.clear` (panel, source). The
+  card draws one row per straight edge with a degree field and a clear action; a field at zero clears.
+
+## 7. Machining and cutouts
 
 Machining is an ordered list of records, not a set of cutouts. Every record has a stable
 `MachiningId` drawn from the document id space, an anchor and tagged parameters:
@@ -366,7 +403,7 @@ cutout removes a volume from the panel body:
 - Machining coordinates never change when an included band moves the core origin; the body is built
   in the nominal frame and the tool is placed there too.
 
-## 7. Display and diagnostics
+## 8. Display and diagnostics
 
 ### 7.1. Colours
 
@@ -392,7 +429,7 @@ Panel issues are computed during loading/rebuild and are not stored as data:
 
 A panel with an issue stays in the document, is drawn where possible and shows a warning in the card. A whole-file load error is reserved for scenes that cannot be read or recovered; see [Scene document](document.md).
 
-## 8. Panel commands
+## 9. Panel commands
 
 All changes are `engine` commands with stable ids and typed parameters. The UI never writes to the document directly.
 
@@ -427,6 +464,9 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.corner.clear` — panel, corner `VertexId`. The corner becomes a point; its corner banding is removed with the segment.
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
 - `panel.bow.clear` — panel, edge `EdgeId`.
+- `panel.bevel.set` — panel, source (a rectangle edge or a ring segment), and a positive angle below
+  89°. Refused on a curved segment, on a banded edge, and when the far face would vanish.
+- `panel.bevel.clear` — panel and source. Refused when that edge has no bevel.
 - `assembly.create` — parent container, non-blank name, placement. Creates an empty assembly component.
 - `node.rename` — panel, group or assembly, and a non-blank name; the root group is included.
 - `node.delete` — panel, group or nested assembly. A container is removed with all of its children; the root is rejected.
@@ -448,7 +488,7 @@ leaves the document, its revision and the id counter unchanged.
 Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. Machining commands reject an unknown machining id, an anchor the operation does not accept, and a move index outside `0..len`; a failed command consumes no id and bumps no revision. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A cutout is accepted on every outline kind and subtracted from the resolved core body; shaping a panel that already has machining keeps the cutout tools and re-traces them against the new core. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
 commands keep the root immutable and preserve world transforms when a group is created or flattened.
 
-## 9. Panel tests
+## 10. Panel tests
 
 At minimum:
 
@@ -485,7 +525,12 @@ At minimum:
 - a contour panel file that stores corner features, bows or rectangle banding is a readable error;
 - ring banding has one record per segment, editing it keeps its place, and clearing it returns the
   segment to the add picker;
-- an outline edit that drops a banded segment is refused and leaves the panel unchanged;
+- an outline edit that drops a banded or beveled segment is refused and leaves the panel unchanged;
+- a 45° bevel on a 100 x 50 x 18 panel removes the half-thickness wedge and keeps the nominal size,
+  and a second bevel on another edge accumulates;
+- an arc segment, a duplicate source, a banded edge and an angle at or past the cap are refused with
+  typed errors, and banding a beveled edge is refused;
+- baking a rectangle into a ring moves its bevels onto the ring segments they became;
 - an outline edit that moves the minimum corner keeps the world shape and the machining in place and
   leaves the derived pivot at zero;
 - a ring-banding material missing from the catalogue is a diagnostic, not a load error;
@@ -495,7 +540,7 @@ At minimum:
 
 Catalogue and scene-loading tests live in [Materials and catalogue](materials.md) and [Scene document](document.md).
 
-## 10. Open questions
+## 11. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
 2. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
