@@ -41,23 +41,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 ## Bugs
-- `[ ]` **X36** a split ribbon cell squeezes its main face to 24 pt, so the glyph reads as cut off
-  Why: Observation: a cell is `RIBBON_CELL_WIDTH` (34) x `RIBBON_ROW_HEIGHT` (30), and a tool
-   with methods splits it into a 24 pt main face and a 10 pt caret (`RIBBON_CARET_WIDTH`), so a
-   22 pt glyph sits 1 pt from each edge and the face reads as cut off beside every plain cell.
-   Expected: the face of a tool with methods is a full cell, exactly like a tool without one,
-   and the caret is added to its right. Suspected cause: `ribbon_split_cell` is handed
-   `RIBBON_CELL_WIDTH` and subtracts the caret from it, and `icons.rs`'s own anatomy test
-   asserts the 24 pt face.
-  Shape: The split cell takes `RIBBON_CELL_WIDTH + RIBBON_CARET_WIDTH`, keeps the main face at
-   the full cell and puts the caret outside it, so one row of cells keeps one glyph size and
-   one rhythm; the anatomy test, the width assertion and the ribbon's group columns follow. The
-   caret stays 10 pt, so its target is unchanged.
-  Done: A split cell's main face measures `RIBBON_CELL_WIDTH` and its caret
-   `RIBBON_CARET_WIDTH`, the two touch, the anatomy tests assert the new sizes, a row of mixed
-   plain and split cells reads as one rhythm in an offscreen shot under `target/ui-shots`, and
-   `cargo xtask ci` is green.
-  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs`
 - `[ ]` **X37** an open method list owns the pointer only across part of its own rectangle
   Why: Observation: with a drawing tool armed, the pointer over an open method list keeps the
    list's cursor across a row's glyph and name, but the tool cursor comes back over the
@@ -374,6 +357,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/ui/src/object_card.rs, crates/ui/src/editor/cards.rs, crates/ui/src/theme.rs`
 
 ## Done
+
+- `[x]` **X36** a split ribbon cell squeezes its main face to 24 pt, so the glyph reads as cut off
+  Why: Observation: a cell is `RIBBON_CELL_WIDTH` (34) x `RIBBON_ROW_HEIGHT` (30), and a tool
+   with methods splits it into a 24 pt main face and a 10 pt caret (`RIBBON_CARET_WIDTH`), so a
+   22 pt glyph sits 1 pt from each edge and the face reads as cut off beside every plain cell.
+   Expected: the face of a tool with methods is a full cell, exactly like a tool without one,
+   and the caret is added to its right. Suspected cause: `ribbon_split_cell` is handed
+   `RIBBON_CELL_WIDTH` and subtracts the caret from it, and `icons.rs`'s own anatomy test
+   asserts the 24 pt face.
+  Shape: The split cell takes `RIBBON_CELL_WIDTH + RIBBON_CARET_WIDTH`, keeps the main face at
+   the full cell and puts the caret outside it, so one row of cells keeps one glyph size and
+   one rhythm; the anatomy test, the width assertion and the ribbon's group columns follow. The
+   caret stays 10 pt, so its target is unchanged.
+  Done: A split cell's main face measures `RIBBON_CELL_WIDTH` and its caret
+   `RIBBON_CARET_WIDTH`, the two touch, the anatomy tests assert the new sizes, a row of mixed
+   plain and split cells reads as one rhythm in an offscreen shot under `target/ui-shots`, and
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs` — `55f372b`
 
 - `[x]` **U83** the program's own guides get one ink and one stroke: the helper ink
   why: The corner brackets of an open level (U89) and the viewport's own cursor (U88) are the
