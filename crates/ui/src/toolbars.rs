@@ -39,7 +39,7 @@ use std::collections::BTreeMap;
 
 use egui::Ui;
 use furnicraft_engine::PrimitiveKind;
-use furnicraft_model::{ClassCode, Id};
+use furnicraft_model::{ClassCode, FillMode, Id};
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
@@ -88,6 +88,8 @@ pub enum ToolAction {
     Fill {
         /// The class a post or a shelf fills the void with.
         class: ClassCode,
+        /// How the part reads the section the walls leave.
+        mode: FillMode,
     },
     /// Creates an assembly at the scene root.
     CreateAssembly,
@@ -149,8 +151,13 @@ pub enum ToolActivity {
     Primitive(PrimitiveKind),
     /// The box tool is drawing a product frame's reserved box.
     ProductFrame,
-    /// The empty-space tool is armed with a fill class.
-    Fill(ClassCode),
+    /// The empty-space tool is armed with a fill class and its mode.
+    Fill {
+        /// The class the armed cell fills the void with.
+        class: ClassCode,
+        /// How the armed cell reads the section.
+        mode: FillMode,
+    },
 }
 
 /// The activity whose button is pressed, from what the editor holds.
@@ -162,14 +169,14 @@ pub fn tool_activity(
     drawing: Option<DrawTool>,
     primitive: Option<PrimitiveKind>,
     box_owner: Option<BoxOwner>,
-    fill: Option<ClassCode>,
+    fill: Option<(ClassCode, FillMode)>,
 ) -> Option<ToolActivity> {
     match (drawing, primitive, box_owner, fill) {
         (Some(tool), _, _, _) => Some(ToolActivity::Draw(tool)),
         (None, Some(kind), _, _) => Some(ToolActivity::Primitive(kind)),
         (None, None, Some(BoxOwner::Cuboid), _) => Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)),
         (None, None, Some(BoxOwner::Product), _) => Some(ToolActivity::ProductFrame),
-        (None, None, None, Some(class)) => Some(ToolActivity::Fill(class)),
+        (None, None, None, Some((class, mode))) => Some(ToolActivity::Fill { class, mode }),
         (None, None, None, None) => None,
     }
 }
@@ -185,7 +192,9 @@ fn is_armed(activity: Option<ToolActivity>, kind: ToolKind) -> bool {
         // The frame cell runs the card as its primary method, so the drawn method's row carries the
         // pressed state and the cell shows it through the list (U74).
         (Some(ToolActivity::ProductFrame), ToolKind::ProductDraw) => true,
-        (Some(ToolActivity::Fill(armed)), ToolKind::Fill(class)) => armed == class,
+        (Some(ToolActivity::Fill { class: armed, mode: armed_mode }), ToolKind::Fill { class, mode }) => {
+            armed == class && armed_mode == mode
+        }
         _ => false,
     }
 }
@@ -573,7 +582,7 @@ fn show_tool(
     }
     let rows = method_rows(tool, state, context, lang);
     let pinned = state.pinned_index(tool);
-    let Some(face) = main_face(tool, &rows, pinned, lang) else {
+    let Some(face) = main_face(tool, &rows, pinned) else {
         return;
     };
     let caret_hint = Message::ToolMethods.text(lang);
@@ -599,7 +608,8 @@ fn show_tool(
 /// What the main face of a split cell draws and runs.
 ///
 /// It is the pinned method, not the tool: the glyph is the method's artwork when it has any and the
-/// tool's otherwise, because a method that shares its tool's shape must not leave the face blank.
+/// tool's otherwise, because a method that shares its tool's shape must not leave the face blank,
+/// and the hint is the row's own, so a method that cannot run here still says what is missing.
 struct MainFace {
     /// The glyph of the face.
     icon: Icon,
@@ -614,11 +624,11 @@ struct MainFace {
 }
 
 /// The main face of a split cell: the row of the pinned method, read as one cell.
-fn main_face(tool: &'static ToolSpec, rows: &[list::Row], pinned: usize, lang: Lang) -> Option<MainFace> {
+fn main_face(tool: &'static ToolSpec, rows: &[list::Row], pinned: usize) -> Option<MainFace> {
     let row = rows.get(pinned)?;
     Some(MainFace {
         icon: row.method.icon.or(tool.icon)?,
-        hint: icons::tool_hint(row.method.label.text(lang), row.method.shortcut),
+        hint: row.hint.clone(),
         enabled: row.enabled,
         armed: row.armed,
         action: row.action,
@@ -633,7 +643,16 @@ fn method_rows(tool: &'static ToolSpec, state: &Toolbars, context: RibbonContext
     tool.methods()
         .map(|method| {
             let ready = method.run.map(|kind| ready(kind, tool, state, context, lang));
-            let hint = ready.as_ref().map_or_else(|| method.label.text(lang).to_owned(), |ready| ready.hint.clone());
+            let hint = match ready.as_ref() {
+                None => method.label.text(lang).to_owned(),
+                // A method that cannot run here says what is missing.
+                Some(ready) if !ready.enabled => ready.hint.clone(),
+                // A fill's own hint names the tool and then the method — «Post: Largest fit» —
+                // because the two fills are two cells whose methods would otherwise read the same.
+                Some(ready) if matches!(method.run, Some(ToolKind::Fill { .. })) => ready.hint.clone(),
+                // Every other tool names the method alone: the glyph already says which tool it is.
+                Some(_) => icons::tool_hint(method.label.text(lang), method.shortcut),
+            };
             list::Row {
                 method,
                 hint,
@@ -850,7 +869,7 @@ mod tests {
                     "Sphere: click the work plane",
                 ],
             ),
-            ("furniture", &["Panel", "Post", "Product frame", "Shelf"]),
+            ("furniture", &["Panel", "Post: Largest fit", "Product frame", "Shelf: Largest fit"]),
             ("scene", &["Assembly", "Camera", "Light"]),
             ("view", &["Frame all  (F)", "Grid snap  (G)", "Switch the projection  (O)"]),
         ];
@@ -1044,7 +1063,13 @@ mod tests {
             (None, Some(PrimitiveKind::Sphere), None, None, Some(ToolActivity::Primitive(PrimitiveKind::Sphere))),
             (None, None, Some(BoxOwner::Cuboid), None, Some(ToolActivity::Primitive(PrimitiveKind::Cuboid))),
             (None, None, Some(BoxOwner::Product), None, Some(ToolActivity::ProductFrame)),
-            (None, None, None, Some(post), Some(ToolActivity::Fill(post))),
+            (
+                None,
+                None,
+                None,
+                Some((post, FillMode::Fit)),
+                Some(ToolActivity::Fill { class: post, mode: FillMode::Fit }),
+            ),
             (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), None, None, Some(ToolActivity::Draw(DrawTool::Arc))),
         ];
         for (drawing, primitive, box_owner, fill, expected) in cases {
@@ -1267,11 +1292,11 @@ mod tests {
         let post = tool("furniture.panels.post");
         let cell = ready(post.primary().expect("a live tool"), post, &state, full_context(), Lang::En);
         assert!(cell.enabled, "an open piece offers its niche");
-        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::VERTICAL_PANEL }));
+        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit }));
 
         let shelf = tool("furniture.panels.shelf");
         let cell = ready(shelf.primary().expect("a live tool"), shelf, &state, full_context(), Lang::En);
-        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL }));
+        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit }));
     }
 
     #[test]
@@ -1478,18 +1503,70 @@ mod tests {
     }
 
     #[test]
+    fn the_fill_cell_runs_the_mode_the_workspace_pinned() {
+        // Two behaviours, one cell: the pin is the choice between fitting the void and taking its
+        // whole shape, and nothing else stores it (N10).
+        let post = tool("furniture.panels.post");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("furniture"));
+        let methods = post.methods().collect::<Vec<_>>();
+        assert_eq!(methods.len(), 2, "one cell, two methods");
+        assert_eq!(
+            methods.iter().map(|method| method.run).collect::<Vec<_>>(),
+            vec![
+                Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit }),
+                Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
+            ],
+            "the cell's own method fits, its second takes the shape"
+        );
+        assert_eq!(post.id, methods[0].id);
+        assert_eq!(post.variants[0].id, methods[1].id, "a method keeps its namespaced id");
+
+        let (actions, labels) = click_cell(&mut state, post, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit }],
+            "an unpinned cell fits the void"
+        );
+        assert!(
+            labels.iter().any(|label| label == "Post: Largest fit"),
+            "the hint names the tool and the mode: {labels:?}"
+        );
+
+        state.pin(post, methods[1]);
+        let (actions, labels) = click_cell(&mut state, post, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }],
+            "the pinned method runs, and the click still arms nothing by itself"
+        );
+        assert!(labels.iter().any(|label| label == "Post: Whole shape"), "the face follows the pin: {labels:?}");
+    }
+
+    #[test]
+    fn a_disabled_fill_face_says_what_is_missing_rather_than_naming_its_method() {
+        let post = tool("furniture.panels.post");
+        let state = Toolbars::new();
+        let rows = method_rows(post, &state, RibbonContext { product_open: false, ..full_context() }, Lang::En);
+        let face = main_face(post, &rows, 0).expect("a face");
+        assert!(!face.enabled);
+        assert_eq!(face.hint, Message::FillNeedsProduct.text(Lang::En), "the cell explains itself");
+        assert_eq!(face.action, None);
+    }
+
+    #[test]
     fn a_pin_carries_the_main_face_to_the_new_method() {
         let circle = tool("sketch.create.circle");
         let mut state = Toolbars::new();
         state.set_tab(tab("sketch"));
         let rows = method_rows(circle, &state, full_context(), Lang::En);
-        let own = main_face(circle, &rows, state.pinned_index(circle), Lang::En).expect("the tool's own method");
+        let own = main_face(circle, &rows, state.pinned_index(circle)).expect("the tool's own method");
         assert_eq!(own.icon, icons::contour::CIRCLE, "the face draws the method the workspace pinned");
         assert_eq!(own.hint, "Centre and radius  (C)", "the hint names the method and its key, not the tool");
 
         state.pin(circle, rows[2].method);
         let rows = method_rows(circle, &state, full_context(), Lang::En);
-        let pinned = main_face(circle, &rows, state.pinned_index(circle), Lang::En).expect("a face");
+        let pinned = main_face(circle, &rows, state.pinned_index(circle)).expect("a face");
         assert_eq!(pinned.icon, icons::contour::CIRCLE_THREE_POINTS, "the face follows the pin at once");
         assert_eq!(pinned.hint, "Circle through 3 points  (Shift+C)", "the hint follows the pin at once");
 
@@ -1526,7 +1603,7 @@ mod tests {
             }],
         };
         let rows = method_rows(&ARTWORKLESS, &Toolbars::new(), full_context(), Lang::En);
-        let face = main_face(&ARTWORKLESS, &rows, 1, Lang::En).expect("a face");
+        let face = main_face(&ARTWORKLESS, &rows, 1).expect("a face");
         assert_eq!(face.icon, icons::contour::CIRCLE, "a method without artwork keeps the tool's glyph");
         assert_eq!(face.hint, "Circle through 3 points  (Shift+C)", "the hint still names the method");
     }

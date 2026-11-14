@@ -15,7 +15,7 @@ use furnicraft_engine::{PanelCreate, PrimitiveKind, Session};
 use furnicraft_model::Contour;
 use furnicraft_model::{
     ClassCode, Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, Envelope, EulerAngles,
-    FaceSide, Geometry, MachiningAnchor, MachiningParams, Panel, PivotLocal, Placement,
+    FaceSide, FillMode, Geometry, MachiningAnchor, MachiningParams, Panel, PivotLocal, Placement,
 };
 use furnicraft_model::{Path, PathCorner, Project};
 use furnicraft_testkit::{cube_mesh, millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
@@ -1889,22 +1889,29 @@ fn the_empty_space_tool_arms_only_a_class_whose_trait_fills_a_void() {
     let (session, _product) = fill_session();
     let mut editor = Editor::new();
 
-    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("a post fills a void");
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, FillMode::Fit, crate::Lang::En).expect("a post fills a void");
     assert_eq!(
         editor.fill_arm(),
-        Some(FillArm { class: ClassCode::VERTICAL_PANEL, fill: furnicraft_model::Fill::HeightAndDepth }),
-        "a post takes the niche's height and depth"
+        Some(FillArm {
+            class: ClassCode::VERTICAL_PANEL,
+            fill: furnicraft_model::Fill::HeightAndDepth,
+            mode: FillMode::Fit,
+        }),
+        "a post takes the niche's height and depth, fitted by default"
     );
 
-    editor.arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En).expect("a shelf fills a void");
+    editor
+        .arm_fill(&session, ClassCode::HORIZONTAL_PANEL, FillMode::Shape, crate::Lang::En)
+        .expect("a shelf fills a void");
     assert_eq!(
-        editor.fill_arm().map(|arm| arm.fill),
-        Some(furnicraft_model::Fill::WidthAndDepth),
-        "a shelf takes the niche's width and depth"
+        editor.fill_arm().map(|arm| (arm.fill, arm.mode)),
+        Some((furnicraft_model::Fill::WidthAndDepth, FillMode::Shape)),
+        "a shelf takes the niche's width and depth in the mode it was asked for"
     );
 
     let back: ClassCode = "30.12.00".parse().expect("a back panel");
-    let refusal = editor.arm_fill(&session, back, crate::Lang::En).expect_err("a back panel does not fill a void");
+    let refusal =
+        editor.arm_fill(&session, back, FillMode::Fit, crate::Lang::En).expect_err("a back panel does not fill a void");
     assert!(refusal.contains(furnicraft_text::Message::FillNeedsFillTrait.text(crate::Lang::En)), "{refusal}");
     assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL), "a refusal keeps the arm");
 }
@@ -1915,7 +1922,7 @@ fn the_empty_space_tool_refuses_without_an_open_product() {
     let session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
     let refusal = editor
-        .arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En)
+        .arm_fill(&session, ClassCode::HORIZONTAL_PANEL, FillMode::Fit, crate::Lang::En)
         .expect_err("no product offers no niche");
     assert!(refusal.contains(furnicraft_text::Message::FillNeedsProduct.text(crate::Lang::En)), "{refusal}");
     assert!(editor.fill_arm().is_none());
@@ -1926,13 +1933,14 @@ fn arming_the_empty_space_tool_leaves_the_other_pointer_modes() {
     let (session, _product) = fill_session();
     let mut editor = Editor::new();
     editor.start_drawing(DrawTool::Line);
-    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post");
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, FillMode::Fit, crate::Lang::En).expect("arm the post");
     assert!(editor.drawing().is_none(), "a fill replaces the running draft");
     editor.arm_primitive(PrimitiveKind::Cuboid, Length::from_millimetres(100).expect("size")).expect("arm the box");
     assert!(editor.fill_arm().is_none(), "a primitive replaces the fill");
     assert!(editor.box_tool().is_some());
-    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post again");
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, FillMode::Shape, crate::Lang::En).expect("arm the post again");
     assert!(editor.box_tool().is_none(), "the fill replaces the box tool");
+    assert_eq!(editor.fill_arm().map(|arm| arm.mode), Some(FillMode::Shape), "the mode switches with the method");
     editor.cancel_fill();
     assert!(editor.fill_arm().is_none());
 }
@@ -1941,11 +1949,33 @@ fn arming_the_empty_space_tool_leaves_the_other_pointer_modes() {
 fn a_second_click_on_the_armed_cell_drops_the_empty_space_tool() {
     let (mut session, _product) = fill_session();
     let mut editor = Editor::new();
-    let action = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL };
+    let action = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit };
     editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the first click arms");
     assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL));
     editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the second click drops");
     assert!(editor.fill_arm().is_none(), "the cell toggles the tool");
+}
+
+#[test]
+fn the_other_method_of_the_cell_switches_the_mode_instead_of_dropping_the_tool() {
+    let (mut session, _product) = fill_session();
+    let mut editor = Editor::new();
+    let fits = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit };
+    let shaped = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape };
+    editor.apply_ribbon_actions(&mut session, vec![fits], crate::Lang::En).expect("the fit method arms");
+    editor.apply_ribbon_actions(&mut session, vec![shaped], crate::Lang::En).expect("the shape method switches");
+    assert_eq!(
+        editor.fill_arm().map(|arm| (arm.class, arm.mode)),
+        Some((ClassCode::HORIZONTAL_PANEL, FillMode::Shape))
+    );
+    // The mode survives a tool switch: another tool takes the pointer, and picking the method again
+    // brings back both the fill and the mode it was asked for.
+    editor.start_drawing(DrawTool::Line);
+    assert!(editor.fill_arm().is_none(), "another tool owns the pointer");
+    editor.apply_ribbon_actions(&mut session, vec![shaped], crate::Lang::En).expect("the shape method arms again");
+    assert_eq!(editor.fill_arm().map(|arm| arm.mode), Some(FillMode::Shape), "the same method, the same mode");
+    editor.apply_ribbon_actions(&mut session, vec![shaped], crate::Lang::En).expect("the same method drops");
+    assert!(editor.fill_arm().is_none());
 }
 
 #[test]

@@ -17,7 +17,7 @@
 //! Every row is a constant, so the ribbon allocates nothing to read the map.
 
 use furnicraft_engine::PrimitiveKind;
-use furnicraft_model::ClassCode;
+use furnicraft_model::{ClassCode, FillMode};
 use furnicraft_text::Message;
 
 use crate::draw::DrawTool;
@@ -49,8 +49,14 @@ pub enum ToolKind {
     ProductDraw,
     /// Creates a panel at the scene root.
     Panel,
-    /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair.
-    Fill(ClassCode),
+    /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair, and `mode`
+    /// says whether the part takes the largest rectangle that fits or the whole section.
+    Fill {
+        /// The class a post or a shelf fills the void with.
+        class: ClassCode,
+        /// How the part reads the section the walls leave.
+        mode: FillMode,
+    },
     /// Creates an assembly at the scene root.
     Assembly,
     /// Creates a camera at the scene root.
@@ -109,6 +115,28 @@ impl Method {
         self.run.is_some()
     }
 }
+
+/// The post's second method: take the whole section instead of the largest fit.
+///
+/// A fill cell draws as one split cell rather than two cells a maker has to tell apart: the method
+/// list is the choice between fitting and taking the shape, and the pinned method is the one the
+/// cell runs (U74). The shelf's list is the same choice over its own class.
+const FILL_POST_SHAPE: &[VariantSpec] = &[VariantSpec {
+    id: "furniture.panels.post.shape",
+    label: Message::FillMethodShape,
+    icon: None,
+    run: Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
+    section: None,
+}];
+
+/// The shelf's second method: take the whole section instead of the largest fit.
+const FILL_SHELF_SHAPE: &[VariantSpec] = &[VariantSpec {
+    id: "furniture.panels.shelf.shape",
+    label: Message::FillMethodShape,
+    icon: None,
+    run: Some(ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape }),
+    section: None,
+}];
 
 /// One tool: one cell of a group's row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -697,18 +725,18 @@ const FURNITURE: [GroupSpec; 6] = [
                 label: Message::ToolPost,
                 icon: Some(icons::scene::POST),
                 shortcut: None,
-                run: Some(ToolKind::Fill(ClassCode::VERTICAL_PANEL)),
-                method: None,
-                variants: &[],
+                run: Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit }),
+                method: Some(Message::FillMethodFit),
+                variants: FILL_POST_SHAPE,
             },
             ToolSpec {
                 id: "furniture.panels.shelf",
                 label: Message::ToolShelf,
                 icon: Some(icons::scene::SHELF),
                 shortcut: None,
-                run: Some(ToolKind::Fill(ClassCode::HORIZONTAL_PANEL)),
-                method: None,
-                variants: &[],
+                run: Some(ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit }),
+                method: Some(Message::FillMethodFit),
+                variants: FILL_SHELF_SHAPE,
             },
             planned("furniture.panels.contour", Message::ToolContourPanel),
         ],
@@ -1057,8 +1085,10 @@ mod tests {
             ToolKind::Product,
             ToolKind::ProductDraw,
             ToolKind::Panel,
-            ToolKind::Fill(ClassCode::VERTICAL_PANEL),
-            ToolKind::Fill(ClassCode::HORIZONTAL_PANEL),
+            ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Fit },
+            ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape },
+            ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Fit },
+            ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape },
             ToolKind::Assembly,
             ToolKind::Camera,
             ToolKind::Light,

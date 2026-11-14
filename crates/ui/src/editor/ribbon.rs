@@ -49,7 +49,7 @@ impl Editor {
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
             self.box_tool(),
-            self.fill_arm().map(|arm| arm.class),
+            self.fill_arm().map(|arm| (arm.class, arm.mode)),
         );
         let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
         let context = toolbars::RibbonContext {
@@ -90,13 +90,14 @@ impl Editor {
                 ToolAction::CreateProductCard => outcome.open_product_card = true,
                 ToolAction::DrawProductFrame => self.arm_box(BoxOwner::Product),
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
-                ToolAction::Fill { class } => {
-                    // A second click on the armed cell drops the tool; the arm is a mode, not a
-                    // one-shot, because a maker places several posts in one piece.
-                    if self.fill_arm().is_some_and(|arm| arm.class == class) {
+                ToolAction::Fill { class, mode } => {
+                    // A second click on the same method drops the tool; the arm is a mode, not a
+                    // one-shot, because a maker places several posts in one piece. Picking the other
+                    // method of the same cell arms it with that mode instead of dropping the tool.
+                    if self.fill_arm().is_some_and(|arm| arm.class == class && arm.mode == mode) {
                         self.cancel_fill();
                     } else {
-                        self.arm_fill(session, class, lang)?;
+                        self.arm_fill(session, class, mode, lang)?;
                     }
                 }
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,

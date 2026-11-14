@@ -691,7 +691,12 @@ fn the_empty_space_ghost_is_painted_offscreen() {
         let document = app.tabs.active_mut();
         document
             .editor
-            .arm_fill(&document.session, furnicraft_model::ClassCode::HORIZONTAL_PANEL, furnicraft_text::Lang::En)
+            .arm_fill(
+                &document.session,
+                furnicraft_model::ClassCode::HORIZONTAL_PANEL,
+                furnicraft_model::FillMode::Fit,
+                furnicraft_text::Lang::En,
+            )
             .expect("the shelf fill arms inside the open product");
         let project = document.session.project();
         let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");

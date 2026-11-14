@@ -22,13 +22,9 @@
 //! The ghost is shell paint, not the session preview overlay: an overlay entry is keyed by the id of
 //! a node the document holds (ADR 0093), and a part that does not exist yet has none.
 
-use std::f64::consts::FRAC_PI_2;
-
 use eframe::egui::{self, FontId, Pos2, Rect, Stroke, Ui};
-use furnicraft_geom::{DQuat, DVec2, DVec3};
-use furnicraft_model::{
-    Contour, Fill, Id, Niche, NicheRefusal, Panel, PanelNominalSize, PanelOutline, Placement, Project,
-};
+use furnicraft_geom::DVec3;
+use furnicraft_model::{Fill, FillMode, FillRefusal, Id, Niche, PanelNominalSize, PanelOutline, Placement, Project};
 use furnicraft_scene::{Camera, Ray};
 use furnicraft_ui::theme;
 use furnicraft_units::Length;
@@ -105,6 +101,8 @@ pub(crate) struct FillGizmo {
     /// The point, the fill and the exact free coordinate the ghost was measured at, so a still
     /// pointer re-measures nothing.
     measured: Option<(Id, DVec3, Fill, Length, Option<f64>)>,
+    /// The mode the ghost was measured in; picking the other method measures again at once.
+    mode: FillMode,
 }
 
 impl FillGizmo {
@@ -131,12 +129,14 @@ impl FillGizmo {
     /// Measures the void around `point` and records the ghost, unless nothing moved.
     ///
     /// Returns whether the ghost or the refusal changed, so the caller can ask for a repaint.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn hover(
         &mut self,
         project: &Project,
         product: Id,
         point: DVec3,
         fill: Fill,
+        mode: FillMode,
         thickness: Length,
         free: Option<f64>,
     ) -> bool {
@@ -148,11 +148,13 @@ impl FillGizmo {
                     && measured_free == free
                     && (measured_point - point).length() < MEASURE_STEP_MM
             },
-        ) {
+        ) && self.mode == mode
+        {
             return false;
         }
         self.measured = Some((product, point, fill, thickness, free));
-        match plan_at(project, product, point, fill, thickness, free) {
+        self.mode = mode;
+        match plan_at(project, product, point, fill, mode, thickness, free) {
             Ok(ghost) => {
                 self.ghost = Some(ghost);
                 self.refusal = None;
@@ -237,11 +239,9 @@ fn widest_edge(points: &[DVec3], axis: DVec3) -> Option<usize> {
     best.map(|(_, index)| index)
 }
 
-/// Measures the void at `point` and answers the part a click would create.
+/// Measures the void at `point` and answers the part a click would create, fitted.
 ///
-/// The point has to be inside `product`, which is the open piece: a niche belongs to the working
-/// product (ADR 0098). The measurement is the model's ([`Project::niche`]); the free-axis position
-/// is the only number this function rounds, because it follows the pointer in whole millimetres.
+/// The test-only entry point: the shell always knows the mode its cell runs.
 #[cfg(test)]
 pub(crate) fn plan(
     project: &Project,
@@ -250,61 +250,34 @@ pub(crate) fn plan(
     fill: Fill,
     thickness: Length,
 ) -> Result<FillGhost, String> {
-    plan_at(project, product, point, fill, thickness, None)
+    plan_at(project, product, point, fill, FillMode::Fit, thickness, None)
 }
 
-/// The axis of the open product's frame the fill's free position runs along.
+/// Measures the void at `point` in `mode` and answers the part a click would create.
 ///
-/// A shelf's height and a post's place across the void both lie on the panel's own thickness axis,
-/// so the distance fields measure the two faces the ghost draws (`world` and `top`).
-pub(crate) const fn free_axis(fill: Fill) -> usize {
-    match fill {
-        Fill::WidthAndDepth => 2,
-        Fill::HeightAndDepth => 0,
-    }
-}
-
-/// Measures the void at `point` with the free position fixed at `free`, in the product's frame.
-///
-/// `free` is `None` while the pointer picks the position. A typed distance pins it, so the ghost
-/// lands exactly there instead of following the next pointer movement (ADR 0103).
+/// The measurement is the model's ([`furnicraft_model::Project::fill_plan`]); this function only
+/// turns the answer into the wireframe the maker sees: the plan's base polygon on both faces, in
+/// the world, and the two faces the distance fields measure. `free` pins the free-axis position —
+/// a typed distance fixes it, the pointer drives it otherwise (ADR 0103).
 pub(crate) fn plan_at(
     project: &Project,
     product: Id,
     point: DVec3,
     fill: Fill,
+    mode: FillMode,
     thickness: Length,
     free: Option<f64>,
 ) -> Result<FillGhost, String> {
-    let niche = project.niche(point).map_err(refusal_sentence)?;
-    if niche.product != product {
-        return Err("The void belongs to another product; open it to fill it.".to_owned());
-    }
+    let plan = project.fill_plan(product, point, fill, mode, thickness, free).map_err(refusal_sentence)?;
     let parent_world = project.world_placement(product).ok_or_else(|| "The open product has no frame.".to_owned())?;
-    let inverse = parent_world.inverse().map_err(|_| "The open product has no inverse frame.".to_owned())?;
-    let local = inverse.transform_point(point);
-    let gap = thickness.millimetres_f64();
-    if !local.is_finite() || !niche.size.is_finite() || !niche.local_min.is_finite() || !gap.is_finite() || gap <= 0.0 {
-        return Err("The void cannot be measured.".to_owned());
-    }
-
-    let (outline, nominal_size, placement) = match fill {
-        Fill::WidthAndDepth => shelf(&niche, local, gap, free)?,
-        Fill::HeightAndDepth => post(&niche, local, gap, free)?,
-    };
-    let size_mm = DVec3::new(nominal_size.length().millimetres_f64(), nominal_size.width().millimetres_f64(), gap);
-    let length = size_mm.x;
-    let width = size_mm.y;
-    let world_placement = Placement::compose(parent_world, placement)
+    let world_placement = Placement::compose(parent_world, plan.placement)
         .map_err(|_| "The part cannot be placed in the open product.".to_owned())?;
+    let gap = thickness.millimetres_f64();
     let base = |x: f64, y: f64| world_placement.transform_point(DVec3::new(x, y, 0.0));
-    let world = match &outline {
-        PanelOutline::Contour { contour } => ring_corners(contour, base)?,
-        PanelOutline::Rect { .. } => vec![(0.0, 0.0), (length, 0.0), (length, width), (0.0, width)]
-            .into_iter()
-            .map(|(x, y)| base(x, y))
-            .collect(),
-    };
+    let world = plan.corners.iter().map(|corner| base(corner.x, corner.y)).collect::<Vec<_>>();
+    if world.len() < 3 || !gap.is_finite() || gap <= 0.0 {
+        return Err("The outline of the void is not a ring.".to_owned());
+    }
     // The far face is the base face moved by the material thickness along the panel's own Z axis: a
     // shelf's thickness is vertical, a post's runs across the void.
     let lift = world_placement.transform_vector(DVec3::Z) * gap;
@@ -315,23 +288,22 @@ pub(crate) fn plan_at(
     let axes = [world_placement.transform_vector(DVec3::X), world_placement.transform_vector(DVec3::Y)];
     // The free axis is the panel's own thickness axis, so the marker it measures is the board's base
     // face or its far face, whichever the stance puts lower; the placement alone does not say which.
-    let axis = free_axis(fill);
-    let parent_base = placement.translation();
-    let parent_far = parent_base + placement.transform_vector(DVec3::Z) * gap;
-    let base_is_low = parent_base[axis] <= parent_far[axis];
-    let (free_low, free_high) =
-        if base_is_low { (parent_base[axis], parent_far[axis]) } else { (parent_far[axis], parent_base[axis]) };
+    let axis = furnicraft_model::free_axis(fill);
+    let base_along = plan.placement.translation()[axis];
+    let far_along = base_along + plan.placement.transform_vector(DVec3::Z)[axis] * gap;
     let (base_centre, far_centre) = (midpoint(&world), midpoint(&top));
-    let faces = if base_is_low { [base_centre, far_centre] } else { [far_centre, base_centre] };
+    let faces = if base_along <= far_along { [base_centre, far_centre] } else { [far_centre, base_centre] };
+    let size_mm =
+        DVec3::new(plan.nominal_size.length().millimetres_f64(), plan.nominal_size.width().millimetres_f64(), gap);
     Ok(FillGhost {
-        parent: product,
-        outline,
-        nominal_size,
-        placement,
-        niche,
+        parent: plan.product,
+        outline: plan.outline,
+        nominal_size: plan.nominal_size,
+        placement: plan.placement,
+        niche: plan.niche,
         size_mm,
-        free_low,
-        free_high,
+        free_low: plan.free_low,
+        free_high: plan.free_high,
         world,
         top,
         faces,
@@ -339,172 +311,18 @@ pub(crate) fn plan_at(
     })
 }
 
-/// The shelf a click would create: the footprint the void leaves a board of that thickness, with the
-/// pointer as its height.
-///
-/// The free position runs in whole millimetres inside the void's box, and the cell answers the
-/// footprint at the shelf's own slab: a wall that leans into the void or a ceiling that comes down
-/// at the back limits the board at the face that would cut into it, so the part fits by
-/// construction. A rectangular footprint keeps the rectangle panel the tool has always created; a
-/// shaped one is a contour panel (ADR 0042).
-fn shelf(
-    niche: &Niche,
-    local: DVec3,
-    gap: f64,
-    free: Option<f64>,
-) -> Result<(PanelOutline, PanelNominalSize, Placement), String> {
-    let low = niche.local_min.z;
-    let high = niche.local_max().z - gap;
-    if high < low {
-        return Err("The void is thinner than the material.".to_owned());
-    }
-    let z = free.map_or_else(|| follow(local.z, low, high), |free| free.clamp(low, high));
-    let footprint = niche.cut(2, (z, z + gap), (0, 1)).ok_or_else(place_too_small)?;
-    let (outline, nominal_size, corner) = outline_of(footprint)?;
-    let translation = DVec3::new(corner.x, corner.y, z);
-    let placement = Placement::new(translation, DQuat::IDENTITY)
-        .map_err(|_| "The shelf cannot be placed in the void.".to_owned())?;
-    Ok((outline, nominal_size, placement))
-}
-
-/// The post a click would create: the void's height and the depth the void leaves a board of that
-/// thickness, with the pointer as its place across the void.
-///
-/// The board stands in the post's stance (ADR 0105), so its length runs up from the void's floor,
-/// its width across the depth and its thickness away from the face the pointer measured. The
-/// footprint is therefore the cell cut along the board's thickness and seen in the panel's own
-/// `(x, y)`, which the product's `(z, y)` becomes once the board is turned: a post stands against a
-/// splayed wall with the depth the slab really has.
-fn post(
-    niche: &Niche,
-    local: DVec3,
-    gap: f64,
-    free: Option<f64>,
-) -> Result<(PanelOutline, PanelNominalSize, Placement), String> {
-    let low = niche.local_min.x;
-    let high = niche.local_max().x - gap;
-    if high < low {
-        return Err("The void is narrower than the material.".to_owned());
-    }
-    let x = free.map_or_else(|| follow(local.x, low, high), |free| free.clamp(low, high));
-    let footprint = niche.cut(0, (x, x + gap), (2, 1)).ok_or_else(place_too_small)?;
-    let (outline, nominal_size, corner) = outline_of(footprint)?;
-    // The post is the shelf turned a quarter-turn to the right about `+Y` (ADR 0105): its local X is
-    // the product's Z, its local Y the product's Y, and its thickness runs back towards the face the
-    // pointer measured, so the node sits one thickness to the `+X` side of that face.
-    let rotation = DQuat::from_rotation_y(-FRAC_PI_2);
-    let translation = DVec3::new(x + gap, corner.y, corner.x);
-    let placement =
-        Placement::new(translation, rotation).map_err(|_| "The post cannot be placed in the void.".to_owned())?;
-    Ok((outline, nominal_size, placement))
-}
-
-/// The part's outline in the panel's own plane, from the footprint the void leaves it.
-///
-/// A footprint that is exactly the rectangle around it keeps the rectangle panel; anything else is a
-/// contour panel whose ring is the footprint itself, anchored at its own zero corner. The answer
-/// carries the corner the panel is placed at, in the footprint's own `(u, v)` axes.
-fn outline_of(points: Vec<DVec2>) -> Result<(PanelOutline, PanelNominalSize, DVec2), String> {
-    let Some(first) = points.first().copied() else {
-        return Err(place_too_small());
-    };
-    let low = points.iter().copied().fold(first, DVec2::min);
-    let high = points.iter().copied().fold(first, DVec2::max);
-    if is_rectangle(&points, low, high) {
-        let nominal_size = PanelNominalSize::new(
-            length_of(high.x - low.x).ok_or_else(place_too_small)?,
-            length_of(high.y - low.y).ok_or_else(place_too_small)?,
-        )
-        .map_err(|error| error.to_string())?;
-        return Ok((PanelOutline::Rect { corner_features: Vec::new(), edge_bows: Vec::new() }, nominal_size, low));
-    }
-    let ring = ring_of(&points)?;
-    let outline = Panel::anchored_contour(&ring).map_err(|error| error.to_string())?;
-    let nominal_size = Panel::contour_size(&outline).map_err(|error| error.to_string())?;
-    let (min, _) = ring.bounds_micrometres();
-    let corner = DVec2::new(
-        Length::from_micrometres(min[0]).millimetres_f64(),
-        Length::from_micrometres(min[1]).millimetres_f64(),
-    );
-    Ok((PanelOutline::Contour { contour: outline }, nominal_size, corner))
-}
-
-/// Whether a footprint is exactly the rectangle around it.
-fn is_rectangle(points: &[DVec2], low: DVec2, high: DVec2) -> bool {
-    const TOLERANCE: f64 = 1.0e-6;
-    if points.len() != 4 {
-        return false;
-    }
-    points.iter().all(|point| {
-        ((point.x - low.x).abs() <= TOLERANCE || (point.x - high.x).abs() <= TOLERANCE)
-            && ((point.y - low.y).abs() <= TOLERANCE || (point.y - high.y).abs() <= TOLERANCE)
-    })
-}
-
-/// A footprint as the document ring a panel stores as its outline.
-fn ring_of(points: &[DVec2]) -> Result<Contour, String> {
-    let corners = points
-        .iter()
-        .map(|point| Some([document_length(point.x)?, document_length(point.y)?]))
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(place_too_small)?;
-    Contour::from_polygon(corners).map_err(|error| error.to_string())
-}
-
 /// The reason a void cannot be filled, in the maker's words.
-fn refusal_sentence(refusal: NicheRefusal) -> String {
+fn refusal_sentence(refusal: FillRefusal) -> String {
     match refusal {
-        NicheRefusal::Outside => "Point at the empty space inside the open product.".to_owned(),
-        NicheRefusal::Unrepresentable => {
+        FillRefusal::Outside => "Point at the empty space inside the open product.".to_owned(),
+        FillRefusal::Unrepresentable => {
             "The empty space here is not one straight shape; point at a plainer gap.".to_owned()
         }
+        FillRefusal::OtherProduct => "The void belongs to another product; open it to fill it.".to_owned(),
+        FillRefusal::NoFrame => "The open product has no frame.".to_owned(),
+        FillRefusal::TooThin => "The void is thinner than the material.".to_owned(),
+        FillRefusal::TooSmall => "The void is too small for a panel.".to_owned(),
     }
-}
-
-/// The sentence for a void too small for a panel.
-fn place_too_small() -> String {
-    "The void is too small for a panel.".to_owned()
-}
-
-/// A ring's corners in the world, on the panel's base face.
-fn ring_corners(ring: &Contour, base: impl Fn(f64, f64) -> DVec3) -> Result<Vec<DVec3>, String> {
-    let points = ring.sampled_points(1.0).map_err(|error| error.to_string())?;
-    let mut corners = Vec::with_capacity(points.len());
-    for [x, y] in points {
-        corners.push(base(x.millimetres_f64(), y.millimetres_f64()));
-    }
-    if corners.len() < 3 {
-        return Err("The outline of the void is not a ring.".to_owned());
-    }
-    Ok(corners)
-}
-
-/// The pointer's place along the free axis: whole millimetres, kept inside the void.
-fn follow(value: f64, low: f64, high: f64) -> f64 {
-    value.round().clamp(low, high)
-}
-
-/// A whole-millimetre measurement as the document's length, or `None` when it is unusable.
-///
-/// The model measures to the micrometre, but the free axis moves in whole millimetres (ADR 0103);
-/// the measured sides keep their micrometre precision, so a part stays flush with the void.
-fn length_of(millimetres: f64) -> Option<Length> {
-    if !millimetres.is_finite() || millimetres <= 0.0 {
-        return None;
-    }
-    document_length(millimetres)
-}
-
-/// A measurement as the document's whole micrometres, a corner at the origin included.
-fn document_length(millimetres: f64) -> Option<Length> {
-    if !millimetres.is_finite() {
-        return None;
-    }
-    let micrometres = (millimetres * 1000.0).round();
-    if !micrometres.is_finite() || micrometres.abs() > i64::MAX as f64 {
-        return None;
-    }
-    Some(Length::from_micrometres(micrometres as i64))
 }
 
 /// Paints one size at `position`, on a quiet plate so it stays legible over the scene.
@@ -579,6 +397,9 @@ pub(crate) fn envelope_entry(ray: Ray, min: DVec3, max: DVec3) -> Option<DVec3> 
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::f64::consts::FRAC_PI_2;
+
+    use furnicraft_geom::DQuat;
     use furnicraft_model::{ClassCode, Container, Envelope, Id, Placement, Project};
     use furnicraft_units::Length;
 
@@ -725,8 +546,16 @@ mod tests {
     #[test]
     fn a_shelf_in_a_splayed_void_takes_the_trapezoid_outline() {
         let (project, product) = splayed_piece();
-        let ghost = plan(&project, product, DVec3::new(300.0, 280.0, 360.0), Fill::WidthAndDepth, millimetres(18))
-            .expect("a shelf fills the splayed void");
+        let ghost = plan_at(
+            &project,
+            product,
+            DVec3::new(300.0, 280.0, 360.0),
+            Fill::WidthAndDepth,
+            FillMode::Shape,
+            millimetres(18),
+            None,
+        )
+        .expect("a shelf fills the splayed void");
         let outline = ghost.outline.contour().expect("the shelf takes the measured section");
         assert_eq!(ghost.nominal_size.length(), millimetres(400));
         assert_eq!(ghost.nominal_size.width(), millimetres(560));
@@ -848,6 +677,7 @@ mod tests {
             product,
             DVec3::new(300.0, 280.0, 360.0),
             Fill::WidthAndDepth,
+            FillMode::Fit,
             millimetres(18),
             None
         ));
@@ -867,6 +697,7 @@ mod tests {
             product,
             DVec3::new(300.0, 280.0, 360.0),
             Fill::WidthAndDepth,
+            FillMode::Shape,
             millimetres(18),
             None
         ));

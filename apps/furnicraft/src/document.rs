@@ -1116,7 +1116,7 @@ impl Document {
         };
         // A number typed into a field pins the free position; the pointer drives it otherwise.
         let free = self.distances.as_ref().and_then(Distances::pinned_low);
-        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness, free) {
+        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, arm.mode, thickness, free) {
             ui.ctx().request_repaint();
         }
         let Some(ghost) = self.fill_gizmo.ghost().cloned() else {
@@ -1129,7 +1129,7 @@ impl Document {
             self.distance_rects.clear();
             return;
         };
-        let axis = fill_gizmo::free_axis(arm.fill);
+        let axis = furnicraft_model::free_axis(arm.fill);
         let unit = axis_unit(axis);
         let low_wall = ghost.niche.local_min[axis];
         let high_wall = ghost.niche.local_max()[axis];
@@ -1180,7 +1180,7 @@ impl Document {
         if outcome.changed {
             // The typed number or the midpoint moved the ghost: measure it again at that exact
             // coordinate before the frame paints, so the picture and the field agree.
-            self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness, pinned);
+            self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, arm.mode, thickness, pinned);
             ui.ctx().request_repaint();
         }
         self.distances = Some(distances);

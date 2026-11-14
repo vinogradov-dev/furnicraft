@@ -592,7 +592,7 @@ fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step()
         assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
         document
             .editor
-            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Fit, Lang::En)
             .expect("the shelf fill arms inside the open frame");
         (product, harness.revision(), pointer)
     };
@@ -625,60 +625,67 @@ fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step()
     assert!(document.session.project().panel(created).is_none(), "one undo removes the part");
 }
 
-#[test]
-fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
-    // Two posts stand at an angle, so the free section is a trapezoid: the ghost draws the polygon
-    // and the click stores exactly that ring, not the rectangle around it (ADR 0099).
+/// A harness whose open product holds two posts standing at an angle, plus the pointer at the
+/// void's centre and the product's id.
+///
+/// The posts' inner faces run from `(100, 0)` to `(200, 560)` and from `(500, 0)` to `(400, 560)`,
+/// so the free section is a trapezoid: 400 mm wide at the floor and 200 mm wide at the back.
+fn splayed_shelf_harness(name: &str) -> (Harness, furnicraft_model::Id, egui::Pos2) {
     // An empty scene: the sample session's loose parts stand inside a frame created at the
     // origin, and a void holding a part is refused by the niche (ADR 0106).
-    let mut harness = Harness::with_session("frame-fill-shaped", crate::scene_build::empty_session().expect("empty"));
+    let mut harness = Harness::with_session(name, crate::scene_build::empty_session().expect("empty"));
     harness.settle();
     harness.app.product_card.start();
     harness.settle();
     harness.press(egui::Key::Enter, egui::Modifiers::NONE);
-
-    let (product, pointer) = {
-        let document = harness.app.tabs.active_mut();
-        let product = document.session.active_product().expect("the card opens the frame");
-        // The posts' inner faces run from (100, 0) to (200, 560) and from (500, 0) to (400, 560).
-        let slant = 100.0 / 560.0_f64.hypot(100.0);
-        let drop = 560.0 / 560.0_f64.hypot(100.0);
-        for (through, normal) in [((100.0, 0.0), (drop, -slant)), ((500.0, 0.0), (-drop, -slant))] {
-            let direction = (-normal.1, normal.0);
-            let start_y = 280.0 - 600.0 * direction.1;
-            let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
-            let rotation = furnicraft_geom::DQuat::from_rotation_z(normal.1.atan2(normal.0))
-                * furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-            let translation = furnicraft_geom::DVec3::new(start_x, start_y, 720.0)
-                - furnicraft_geom::DVec3::new(normal.0, normal.1, 0.0) * 18.0;
-            let placement = furnicraft_model::Placement::new(translation, rotation).expect("a placement");
-            let nominal = furnicraft_model::PanelNominalSize::new(
-                furnicraft_testkit::millimetres(720),
-                furnicraft_testkit::millimetres(1200),
-            )
-            .expect("a post size");
-            document
-                .editor
-                .create_panel_sized(&mut document.session, product, "Post".to_owned(), nominal, None, placement, None)
-                .expect("add a post");
-        }
-        let project = document.session.project();
-        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
-        let size = furnicraft_geom::DVec3::new(
-            envelope.x().millimetres_f64(),
-            envelope.y().millimetres_f64(),
-            envelope.z().millimetres_f64(),
-        );
-        let centre = project.world_placement(product).expect("a frame").transform_point(size * 0.5);
-        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
-        let pointer = gizmo_math::screen_point(document.camera(), rect, centre).expect("the frame is on screen");
-        assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+    let document = harness.app.tabs.active_mut();
+    let product = document.session.active_product().expect("the card opens the frame");
+    let slant = 100.0 / 560.0_f64.hypot(100.0);
+    let drop = 560.0 / 560.0_f64.hypot(100.0);
+    for (through, normal) in [((100.0, 0.0), (drop, -slant)), ((500.0, 0.0), (-drop, -slant))] {
+        let direction = (-normal.1, normal.0);
+        let start_y = 280.0 - 600.0 * direction.1;
+        let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
+        let rotation = furnicraft_geom::DQuat::from_rotation_z(normal.1.atan2(normal.0))
+            * furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        let translation = furnicraft_geom::DVec3::new(start_x, start_y, 720.0)
+            - furnicraft_geom::DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+        let placement = furnicraft_model::Placement::new(translation, rotation).expect("a placement");
+        let nominal = furnicraft_model::PanelNominalSize::new(
+            furnicraft_testkit::millimetres(720),
+            furnicraft_testkit::millimetres(1200),
+        )
+        .expect("a post size");
         document
             .editor
-            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
-            .expect("the shelf fill arms inside the open frame");
-        (product, pointer)
-    };
+            .create_panel_sized(&mut document.session, product, "Post".to_owned(), nominal, None, placement, None)
+            .expect("add a post");
+    }
+    let project = document.session.project();
+    let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+    let size = furnicraft_geom::DVec3::new(
+        envelope.x().millimetres_f64(),
+        envelope.y().millimetres_f64(),
+        envelope.z().millimetres_f64(),
+    );
+    let centre = project.world_placement(product).expect("a frame").transform_point(size * 0.5);
+    let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+    let pointer = gizmo_math::screen_point(document.camera(), rect, centre).expect("the frame is on screen");
+    assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+    (harness, product, pointer)
+}
+
+#[test]
+fn the_shape_mode_creates_the_whole_section_as_the_ghost_draws_it() {
+    // Two posts stand at an angle, so the free section is a trapezoid: in the shape mode the ghost
+    // draws the polygon and the click stores exactly that ring, not the rectangle around it
+    // (ADR 0099).
+    let (mut harness, product, pointer) = splayed_shelf_harness("frame-fill-shaped");
+    let document = harness.app.tabs.active_mut();
+    document
+        .editor
+        .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Shape, Lang::En)
+        .expect("the shelf fill arms inside the open frame");
 
     harness.click(pointer, egui::PointerButton::Primary);
 
@@ -696,6 +703,38 @@ fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
     let document = harness.app.tabs.active_mut();
     document.session.undo().expect("one undo step");
     assert!(document.session.project().panel(created).is_none(), "one undo removes the shaped part");
+}
+
+#[test]
+fn the_fit_mode_keeps_a_standard_panel_in_a_splayed_niche() {
+    // The same trapezoid, read the other way: the part is the largest rectangle inside it, so it
+    // keeps the rectangle panel, its card and its resize (ADR 0042, N10).
+    let (mut harness, product, pointer) = splayed_shelf_harness("frame-fill-fitted");
+    let document = harness.app.tabs.active_mut();
+    document
+        .editor
+        .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Fit, Lang::En)
+        .expect("the shelf fill arms inside the open frame");
+    let before = harness.revision();
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let document = harness.app.tabs.active();
+    let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
+    assert!(ghost.outline.contour().is_none(), "a fit is a standard rectangle");
+    assert_eq!(ghost.nominal_size.length(), furnicraft_testkit::millimetres(200), "the narrowest width fits");
+    assert_eq!(ghost.nominal_size.width(), furnicraft_testkit::millimetres(560), "and the whole depth");
+    let created = document.editor.selected_node().expect("the new part is selected");
+    let panel = document.session.project().panel(created).expect("the click created a panel");
+    assert!(!panel.is_contour(), "the part is the standard panel the fit chose");
+    assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
+    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+    assert!(harness.revision() > before, "the click writes the document once");
+
+    let document = harness.app.tabs.active_mut();
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the fitted part");
 }
 
 #[test]
@@ -730,7 +769,7 @@ fn a_typed_distance_places_the_fill_exactly_and_the_click_creates_it() {
         assert!(rect.contains(pointer) && rect.contains(away), "{away:?} in {rect:?}");
         document
             .editor
-            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, furnicraft_model::FillMode::Fit, Lang::En)
             .expect("the shelf fill arms inside the open frame");
         (product, pointer, away)
     };
