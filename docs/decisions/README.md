@@ -116,6 +116,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0108](0108-a-shaped-fill-bevels-its-ends-onto-the-walls.md) | A shaped fill bevels its ends onto the walls, and turns the board when it must | Accepted; refines 0105 and 0107; its two refusals are superseded by 0109 |
 | [0109](0109-a-niche-is-bounded-by-the-faces-the-pointer-sees.md) | A niche is bounded by the faces the pointer sees | Accepted; supersedes the coverage clause of 0106 |
 | [0110](0110-one-fill-cell-and-its-build-method.md) | One fill cell, and its build method in the cell's own list | Accepted; refines 0106 and the ribbon list of U74 |
+| [0111](0111-a-guide-is-one-amber-in-screen-space.md) | A guide is one amber, drawn in screen space | Accepted; derives the ink of 0089 and the frame inks of 0087 |
 
 ## Format
 
