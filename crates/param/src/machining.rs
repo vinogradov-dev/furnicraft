@@ -116,12 +116,20 @@ impl PanelPlan {
         }
     }
 
-    /// Folds one panel's machining records, in their list order.
+    /// Folds one panel's machining records, in their list order, then its end bevels.
+    ///
+    /// A bevel is a property of the panel body, not a machining record, but it is cut the same way:
+    /// one difference step with a wedge tool after the core extrusion, so the analytic rectangle
+    /// path, the core region, the cutouts and the other edges' attachments are untouched.
     pub fn of_panel(panel: &Panel, geometry: &PanelGeometry) -> Result<Self, ParamError> {
         let compiler = CompileMachining::new(geometry);
         let mut plan = Self::new(geometry);
         for machining in panel.machining() {
             plan.fold(compiler.compile(machining)?)?;
+        }
+        for bevel in panel.bevels() {
+            let tool = crate::build_bevel_tool(panel, *bevel, geometry)?;
+            plan.steps.push(PlanStep::new(BooleanOp::Difference, tool));
         }
         Ok(plan)
     }
@@ -199,8 +207,8 @@ mod tests {
     use furnicraft_kernel::{Profile, SolidKernel};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
-        Container, Cutout, CutoutDepth, CutoutShape, EdgeId, FaceSide, Id, MachiningAnchor, MachiningId,
-        PanelNominalSize, PanelRect, Placement, Project,
+        Container, Cutout, CutoutDepth, CutoutShape, EdgeBevel, EdgeId, EdgeRef, FaceSide, Id, MachiningAnchor,
+        MachiningId, PanelNominalSize, PanelRect, Placement, Project, RectEdge,
     };
 
     use furnicraft_testkit::millimetres;
@@ -211,6 +219,25 @@ mod tests {
 
     fn panel_size() -> PanelNominalSize {
         PanelNominalSize::new(millimetres(700), millimetres(500)).expect("panel size")
+    }
+
+    /// A 100 x 50 mm panel with one end bevel per `(edge, degrees)` pair.
+    fn bevelled_panel(bevels: &[(RectEdge, i64)]) -> Panel {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let nominal = PanelNominalSize::new(millimetres(100), millimetres(50)).expect("panel size");
+        let panel_id = project
+            .add_panel(project.root().id(), "End", nominal, None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        for (edge, millidegrees) in bevels {
+            let bevel = EdgeBevel::new(
+                EdgeRef::Rect { edge: edge.id() },
+                furnicraft_units::Degrees::from_millidegrees(*millidegrees),
+            )
+            .expect("bevel");
+            project.set_panel_bevel(panel_id, bevel).expect("set bevel");
+        }
+        project.panel(panel_id).expect("panel").clone()
     }
 
     fn panel() -> Panel {
@@ -336,6 +363,55 @@ mod tests {
         assert_eq!(plan.attachments(), &[edge]);
         assert!(plan.steps().is_empty());
         assert!((volume(&plan) - 6_300_000.0).abs() < 1.0, "an attachment leaves the body alone");
+    }
+
+    #[test]
+    fn a_forty_five_degree_bevel_removes_the_wedge_and_keeps_the_nominal_size() {
+        let panel = bevelled_panel(&[(RectEdge::Bottom, 45_000)]);
+        let geometry = geometry(&panel);
+        let plan = PanelPlan::of_panel(&panel, &geometry).expect("panel plan");
+        assert_eq!(plan.steps().len(), 1, "a bevel is one difference step");
+        assert_eq!(plan.steps()[0].op(), BooleanOp::Difference);
+
+        // 100 x 50 x 18 minus the half-thickness wedge (18 x 18 / 2) over the 100 mm edge. The
+        // cutter plane sits one micrometre outside the outline edge, so the body keeps a sliver of
+        // about two cubic millimetres; anything larger would mean the wedge is the wrong shape.
+        let expected = 100.0 * 50.0 * 18.0 - 18.0 * 18.0 / 2.0 * 100.0;
+        let measured = volume(&plan);
+        assert!((measured - expected).abs() < 5.0, "volume was {measured}, expected {expected}");
+        assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size"));
+        assert_eq!(geometry.overall_width(), millimetres(50), "the outline, and so the stock size, is untouched");
+    }
+
+    #[test]
+    fn a_second_bevel_on_the_opposite_edge_accumulates() {
+        let panel = bevelled_panel(&[(RectEdge::Bottom, 45_000), (RectEdge::Top, 45_000)]);
+        let plan = PanelPlan::of_panel(&panel, &geometry(&panel)).expect("panel plan");
+        assert_eq!(plan.steps().len(), 2, "one step per bevel");
+        // The two wedges are on opposite edges of a 50 mm wide panel and do not overlap.
+        let expected = 100.0 * 50.0 * 18.0 - 2.0 * (18.0 * 18.0 / 2.0 * 100.0);
+        let measured = volume(&plan);
+        assert!((measured - expected).abs() < 10.0, "volume was {measured}, expected {expected}");
+    }
+
+    #[test]
+    fn a_bevel_cutter_is_the_wedge_across_its_edge() {
+        let panel = bevelled_panel(&[(RectEdge::Bottom, 45_000)]);
+        let plan = PanelPlan::of_panel(&panel, &geometry(&panel)).expect("panel plan");
+        let tool = plan.steps()[0].tool();
+        assert!(tool.steps().is_empty(), "a bevel tool is one extrusion");
+        let frame = tool.base().frame();
+        // The frame starts on the bottom edge, one overshoot before its start, and its local Z runs
+        // along the edge, X into the panel and Y across the thickness.
+        assert!((frame.origin.x + crate::TOOL_OVERSHOOT_MM).abs() < 1.0e-9, "origin x {}", frame.origin.x);
+        assert!(frame.origin.y.abs() < 1.0e-9, "the bottom edge starts at y = 0: {}", frame.origin.y);
+        assert!(frame.origin.z.abs() < 1.0e-9, "the wedge starts on face B");
+        assert!((frame.x - DVec3::Y).length() < 1.0e-9, "local X points into the panel: {:?}", frame.x);
+        assert!((frame.y - DVec3::Z).length() < 1.0e-9, "local Y is the thickness: {:?}", frame.y);
+        assert!((frame.z - DVec3::X).length() < 1.0e-9, "local Z runs along the edge: {:?}", frame.z);
+        assert!((tool.base().height() - (100.0 + 2.0 * crate::TOOL_OVERSHOOT_MM)).abs() < 1.0e-9);
+        let profile = tool.base().profile();
+        assert_eq!(profile.outer.len(), 4, "the wedge is closed outside the panel");
     }
 
     #[test]
