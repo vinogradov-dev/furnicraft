@@ -111,6 +111,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/catalog.rs`
 ## Done
 
+- `[x]` **N16** a changed bevel angle rebuilds the panel body
+  Why: The mesh cache's panel inputs compared the outline, size, machining and banding but not
+   the end bevels, so a bevel angle change bumped the revision and the evaluator still returned
+   the cached body.
+  Done: PanelInputs records and compares the bevels, and a test changes an angle and asserts
+   the body is rebuilt.
+  `files: crates/mesh/src/lib.rs` — `933416a`
+
 - `[x]` **N15** a shaped fill starts its ring at the panel's zero corner
   Why: The niche returns the section in its own angular order, so a shaped panel's first corner
    was not its zero corner; on a board turned about its length axis it sat at the far end and
