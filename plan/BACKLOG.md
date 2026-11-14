@@ -40,24 +40,6 @@ been reproduced. Taking it moves the line into `## Now` at its place in the work
 name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
-- `[ ]` **N13** the fill cell has one panel kind and a visible build method
-  Why: The owner reports that the empty-space tool's menu reads like a choice between two
-   panels: the Shape row has no icon and, after picking it, the cell keeps showing the pinned
-   Fit, so the choice looks like it did not take. He asks for one panel whose build method
-   lives in a secondary menu, with a visible selected state.
-  Shape: Keep one cell per panel kind (post, shelf). Put both build methods under a 'Build
-   method' caption in the cell's own method list, give the shape row the polygon glyph, and
-   always draw the tool's glyph on the cell face so the mode never becomes a second panel.
-   While a mode is armed the face shows that method, pressed, with its own hint and its own
-   action (a second click drops the tool); the pinned row keeps marking the workspace default.
-   Rename the rows 'Largest rectangle' and 'Niche shape' / 'Наибольший прямоугольник' and 'По
-   форме ниши'. Record the decision in an ADR.
-  Done: Tests: both fill methods carry a glyph and the build caption; the open list draws the
-   caption and both rows; the armed shape is shown on the cell while Fit is pinned, keeps the
-   post glyph and its click toggles the armed mode; the face keeps the tool glyph for both
-   rows; the existing pin and language tests pass; cargo xtask ci is green.
-  `files: crates/ui/src/toolbars/spec.rs,crates/ui/src/toolbars.rs,crates/ui/src/toolbars/ready.rs,crates/text/src/messages.rs`
-
 ## Bugs
 ## Next
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
@@ -128,6 +110,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
 ## Done
+
+- `[x]` **N13** the fill cell has one panel kind and a visible build method
+  Why: The owner reports that the empty-space tool's menu reads like a choice between two
+   panels: the Shape row has no icon and, after picking it, the cell keeps showing the pinned
+   Fit, so the choice looks like it did not take. He asks for one panel whose build method
+   lives in a secondary menu, with a visible selected state.
+  Shape: Keep one cell per panel kind (post, shelf). Put both build methods under a 'Build
+   method' caption in the cell's own method list, give the shape row the polygon glyph, and
+   always draw the tool's glyph on the cell face so the mode never becomes a second panel.
+   While a mode is armed the face shows that method, pressed, with its own hint and its own
+   action (a second click drops the tool); the pinned row keeps marking the workspace default.
+   Rename the rows 'Largest rectangle' and 'Niche shape' / 'Наибольший прямоугольник' and 'По
+   форме ниши'. Record the decision in an ADR.
+  Done: Tests: both fill methods carry a glyph and the build caption; the open list draws the
+   caption and both rows; the armed shape is shown on the cell while Fit is pinned, keeps the
+   post glyph and its click toggles the armed mode; the face keeps the tool glyph for both
+   rows; the existing pin and language tests pass; cargo xtask ci is green.
+  `files: crates/ui/src/toolbars/spec.rs,crates/ui/src/toolbars.rs,crates/ui/src/toolbars/ready.rs,crates/text/src/messages.rs` — `cb99243`
 
 - `[x]` **N14** the niche is bounded by the faces the pointer sees, not by the envelope
   Why: The owner reports that N9-N12 do not deliver the behaviour: turned panels still blind
