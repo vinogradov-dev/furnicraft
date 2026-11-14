@@ -30,10 +30,10 @@
 //! line.
 //!
 //! A tool with more than one input method is a split button (U74): [`icons::ribbon_split_cell`] gives
-//! it a main face that runs the method the workspace pinned and a caret face that opens its variant
-//! list, while a tool with one method keeps the whole cell and runs on the click. The pin is a
-//! workspace setting, the open list is view state, and the key of the tool runs the pinned method
-//! without opening anything.
+//! it a main face that is a whole cell and runs the method the workspace pinned, plus a caret face
+//! added beside it that opens its variant list, while a tool with one method keeps the whole cell and
+//! runs on the click. The pin is a workspace setting, the open list is view state, and the key of the
+//! tool runs the pinned method without opening anything.
 
 use std::collections::BTreeMap;
 
@@ -549,10 +549,11 @@ fn capitals_centre(galley: &egui::Galley) -> f32 {
 
 /// One tool cell: its glyph, and the action a click asks the editor to run.
 ///
-/// A tool with more than one input method is a split button (U74): its main face runs the method the
-/// workspace pinned and names it in the hint, and a caret face in the right column opens the list of
-/// the other methods. A tool with one method keeps the whole cell and runs on the click, so a tool
-/// that has no choice carries no caret.
+/// A tool with more than one input method is a split button (U74): its main face is a full cell that
+/// runs the method the workspace pinned and names it in the hint, and a caret face beside it opens
+/// the list of the other methods, so the row keeps one glyph pitch and one glyph size whether a tool
+/// has a choice or not (X36). A tool with one method keeps the whole cell and runs on the click, so a
+/// tool that has no choice carries no caret.
 fn show_tool(
     ui: &mut Ui,
     tool: &'static ToolSpec,
@@ -1375,6 +1376,33 @@ mod tests {
     }
 
     #[test]
+    fn every_drawn_row_fits_the_narrowest_window() {
+        // A split cell adds its caret column beside the cell (X36), so the body is wider than its cell
+        // count by one caret per listed tool. The narrowest window FurniCraft opens is 640 x 480, and
+        // the ribbon has no scroll area by design (ADR 0091), so a row that outgrew the window would
+        // be clipped and lose a tool.
+        const MIN_WINDOW_WIDTH: f32 = 640.0;
+        for spec in spec::tabs().iter().filter(|tab| tab.is_drawn()) {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut state = Toolbars::new();
+            state.set_tab(spec);
+            let mut drawn = 0.0;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                let left = ui.min_rect().left();
+                ribbon_body(ui, &mut state, full_context(), &mut Vec::new(), Lang::En);
+                drawn = ui.min_rect().right() - left;
+            });
+            output.drop_without_applying_deltas();
+            assert!(
+                drawn <= MIN_WINDOW_WIDTH,
+                "the {} body draws {drawn} pt, wider than the {MIN_WINDOW_WIDTH} pt window",
+                spec.id
+            );
+        }
+    }
+
+    #[test]
     fn a_tool_with_more_than_one_method_has_a_list_and_one_method_has_none() {
         let line = tool("sketch.create.line");
         let polyline = tool("sketch.create.polyline");
@@ -2127,21 +2155,25 @@ mod tests {
         egui::Event::PointerMoved(pos)
     }
 
-    /// The rect one tool cell takes when a test draws it on its own.
+    /// The rect a tool cell takes when a test draws it on its own: a full cell and the caret column a
+    /// split cell adds beside it, so a cell of either kind fits where the row would put it.
     fn cell_rect() -> egui::Rect {
-        egui::Rect::from_min_size(egui::pos2(16.0, 16.0), egui::vec2(RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT))
+        egui::Rect::from_min_size(
+            egui::pos2(16.0, 16.0),
+            egui::vec2(RIBBON_CELL_WIDTH + icons::RIBBON_CARET_WIDTH, RIBBON_ROW_HEIGHT),
+        )
     }
 
-    /// The middle of a split cell's main face.
+    /// The middle of a split cell's main face, which is the middle of a plain cell.
     fn main_point() -> egui::Pos2 {
         let rect = cell_rect();
-        egui::pos2(rect.left() + (RIBBON_CELL_WIDTH - icons::RIBBON_CARET_WIDTH) / 2.0, rect.center().y)
+        egui::pos2(rect.left() + RIBBON_CELL_WIDTH / 2.0, rect.center().y)
     }
 
-    /// The middle of a split cell's caret face.
+    /// The middle of a split cell's caret face, which begins where the main face ends.
     fn caret_point() -> egui::Pos2 {
         let rect = cell_rect();
-        egui::pos2(rect.right() - icons::RIBBON_CARET_WIDTH / 2.0, rect.center().y)
+        egui::pos2(rect.left() + RIBBON_CELL_WIDTH + icons::RIBBON_CARET_WIDTH / 2.0, rect.center().y)
     }
 
     /// Draws one tool cell at [`cell_rect`], clicks `pos`, and reports what it ran and what it said.

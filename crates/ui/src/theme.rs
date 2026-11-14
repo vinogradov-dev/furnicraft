@@ -99,8 +99,9 @@ pub const RIBBON_ROW_HEIGHT: f32 = 30.0;
 ///
 /// Every tool of every group takes the same cell, so a row is one pitch and a tool never sizes itself
 /// from its name (ADR 0067, revised by ADR 0091): 34 points hold the 22-point glyph with six points of
-/// air on each side. A numeric field takes two cells, because a number has to be readable while it is
-/// being typed.
+/// air on each side. A tool with more than one method keeps this cell as its main face and adds
+/// [`crate::icons::RIBBON_CARET_WIDTH`] points beside it for its list, so the glyph is never squeezed
+/// (X36).
 pub const RIBBON_CELL_WIDTH: f32 = 34.0;
 
 /// The narrowest a ribbon tab may be, so a short name does not become a stamp.
@@ -1156,6 +1157,11 @@ mod tests {
         const { assert!(RIBBON_CELL_WIDTH - crate::icons::RIBBON_ICON_POINT_SIZE >= 2.0 * STEP) };
         const { assert!(RIBBON_ROW_HEIGHT > crate::icons::RIBBON_ICON_POINT_SIZE) };
         assert_eq!(RIBBON_ROW_HEIGHT, 30.0, "the tool row is one 30 pt glyph cell, and U75 left it alone");
+        // A tool with a method list keeps the whole cell and adds its caret beside it (X36), so the
+        // split control is one cell wider than a cell and the glyph keeps its six points of air.
+        let split = RIBBON_CELL_WIDTH + crate::icons::RIBBON_CARET_WIDTH;
+        assert_eq!(split, 44.0, "a split cell is one cell and the caret beside it");
+        assert_eq!(split % STEP, 0.0, "the caret column sits on the same grid as the cell");
         // The chrome rows keep one order: the header is the tallest because it carries the window
         // buttons, the tool row follows because it carries a glyph, then the tab row, the status bar
         // and the caption band.

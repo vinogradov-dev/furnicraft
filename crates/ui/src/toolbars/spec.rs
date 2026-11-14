@@ -246,7 +246,10 @@ impl GroupSpec {
         self.tools.iter().any(ToolSpec::is_live)
     }
 
-    /// The number of cells the group's row takes: one per live tool.
+    /// The number of tool cells the group's row takes: one per live tool.
+    ///
+    /// A tool with more than one method also asks for the caret column beside its cell, so the drawn
+    /// row is wider than this count by one caret per listed tool (X36).
     pub fn columns(&self) -> usize {
         self.tools.iter().filter(|tool| tool.is_live()).count()
     }
@@ -274,7 +277,10 @@ impl TabSpec {
         self.groups.iter().any(GroupSpec::is_live)
     }
 
-    /// The number of cells the tab's body takes, which is the width of its row in cells.
+    /// The number of tool cells the tab's body takes, one per live tool of its groups.
+    ///
+    /// A split cell adds its caret column beside its cell, so this is the pitch the row keeps and not
+    /// its drawn width (X36).
     pub fn columns(&'static self) -> usize {
         self.live_groups().map(GroupSpec::columns).sum()
     }

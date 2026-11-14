@@ -34,8 +34,10 @@ pub const RIBBON_CAPTION_POINT_SIZE: f32 = 9.5;
 
 /// The width of the caret face of a split ribbon cell, in points.
 ///
-/// It is the right column of the same cell, so the two faces tile the control with no gap between
-/// them, and it is well past the 10 x 10 a pointer needs to hit a control without aiming (U74).
+/// It is added to the right of a full cell instead of being cut out of it, so the main face keeps the
+/// [air](crate::theme::RIBBON_CELL_WIDTH) a cell without a list has and the two faces touch with no
+/// gap between them. It is well past the 10 x 10 a pointer needs to hit a control without aiming
+/// (U74, X36).
 pub const RIBBON_CARET_WIDTH: f32 = 10.0;
 
 /// The semantic family of an icon: the role its ink carries and the meaning it speaks for.
@@ -676,10 +678,10 @@ pub fn ribbon_cell(ui: &mut Ui, width: f32, icon: Icon, hint: &str, enabled: boo
 
 /// The two faces of a split ribbon cell: the method a click runs and the caret that lists the rest.
 ///
-/// Both faces sit inside one [`crate::theme::RIBBON_CELL_WIDTH`] x
-/// [`crate::theme::RIBBON_ROW_HEIGHT`] control: the main face takes everything but the right
-/// [`RIBBON_CARET_WIDTH`] points, and the two hit rectangles touch, so there is no dead strip
-/// between them. The main face anchors the variant list.
+/// The main face is a whole [`crate::theme::RIBBON_CELL_WIDTH`] x [`crate::theme::RIBBON_ROW_HEIGHT`]
+/// cell and the caret adds [`RIBBON_CARET_WIDTH`] points to its right, so the two hit rectangles touch
+/// with no dead strip between them and the control is one cell wider than a cell without a list. The
+/// main face anchors the variant list.
 pub struct SplitCell {
     /// The face that runs the pinned method.
     pub main: Response,
@@ -693,23 +695,24 @@ pub struct SplitCell {
 /// pinned, on the face that carries the glyph, and the list of the others, behind the caret. The
 /// resting cell is still one quiet face; the hover, the press and the armed tint follow the face
 /// under the pointer, and only that face's outer corners are rounded, so a hover never reads as two
-/// buttons.
+/// buttons. `cell_width` is the main face, which is a whole cell: the caret is added beside it, so a
+/// tool with methods does not shrink the glyph it puts next to a tool without one (X36).
 ///
 /// `enabled` is the main face's: a pinned method that cannot run here leaves a dim face whose hint
 /// says why, while the caret stays live, because the list is the only way to choose another method.
-/// `on` is the tool's, not the face's: an armed tool carries the accent across the whole cell.
+/// `on` is the tool's, not the face's: an armed tool carries the accent across the whole control.
 pub fn ribbon_split_cell(
     ui: &mut Ui,
-    width: f32,
+    cell_width: f32,
     icon: Icon,
     hint: &str,
     caret_hint: &str,
     enabled: bool,
     on: bool,
 ) -> SplitCell {
-    let size = Vec2::new(width, crate::theme::RIBBON_ROW_HEIGHT);
+    let size = Vec2::new(cell_width + RIBBON_CARET_WIDTH, crate::theme::RIBBON_ROW_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    let seam = (rect.right() - RIBBON_CARET_WIDTH).max(rect.left());
+    let seam = (rect.left() + cell_width).min(rect.right()).max(rect.left());
     let main_rect = egui::Rect::from_min_max(rect.min, pos2(seam, rect.bottom()));
     let caret_rect = egui::Rect::from_min_max(pos2(seam, rect.top()), rect.max);
     let main = ui.interact(main_rect, response.id.with("method"), Sense::click());
@@ -765,10 +768,11 @@ fn paint_split_cell(
     } else {
         crate::theme::text_dim(ui)
     };
-    // The glyph stays in the middle of the whole cell, not of the main face: a split cell keeps the
-    // row's icon rhythm, so the cell beside it does not look shifted.
+    // The glyph sits in the middle of the cell, which is the main face: the caret is added beside a
+    // full cell, so a tool with methods holds its glyph with the same air as a tool without one and
+    // a row of mixed cells reads as one pitch (X36).
     if icon.is_drawn() {
-        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(RIBBON_ICON_POINT_SIZE));
+        let icon_rect = egui::Rect::from_center_size(main_rect.center(), Vec2::splat(RIBBON_ICON_POINT_SIZE));
         let tone = widget_tone(ui, main, enabled, on);
         paint_icon_toned(ui, icon, icon_rect, RIBBON_ICON_POINT_SIZE, color, tone);
     } else {
@@ -1371,9 +1375,9 @@ mod tests {
     }
 
     #[test]
-    fn a_split_cell_tiles_one_cell_into_a_method_and_a_caret() {
-        // Two controls, one cell: the main face and the caret face meet with no gap and no dead strip,
-        // so a pointer anywhere in the cell reaches one of them (U74).
+    fn a_split_cell_is_one_cell_and_a_caret_beside_it() {
+        // X36: the main face is a whole cell and the caret is added to its right, so the two faces
+        // meet with no gap and no dead strip, and the glyph keeps the air of a cell without a list.
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let mut faces = None;
@@ -1392,11 +1396,76 @@ mod tests {
         output.drop_without_applying_deltas();
         let (main, caret) = faces.expect("the split cell drew");
         let height = crate::theme::RIBBON_ROW_HEIGHT;
-        assert_eq!(main.size(), Vec2::new(crate::theme::RIBBON_CELL_WIDTH - RIBBON_CARET_WIDTH, height));
-        assert_eq!(caret.size(), Vec2::new(RIBBON_CARET_WIDTH, height));
+        assert_eq!(main.size(), Vec2::new(crate::theme::RIBBON_CELL_WIDTH, height), "the main face is one cell");
+        assert_eq!(caret.size(), Vec2::new(RIBBON_CARET_WIDTH, height), "the caret is added beside it");
         assert!((main.right() - caret.left()).abs() < 0.01, "the faces meet with no gap");
-        assert_eq!(main.left(), caret.left() - (crate::theme::RIBBON_CELL_WIDTH - RIBBON_CARET_WIDTH));
         assert!(caret.width() >= 10.0 && caret.height() >= 10.0, "the caret is a target a hand can reach");
+    }
+
+    #[test]
+    fn a_split_cell_keeps_the_pitch_of_the_cells_beside_it() {
+        // The row is one pitch whatever a cell holds (X36): a plain cell, the main face of a split
+        // cell and the plain cell after it are each one cell apart, and the glyph of the split cell
+        // sits as far from its face's edges as the glyph of a cell without a list.
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let cell = crate::theme::RIBBON_CELL_WIDTH;
+        let mut rects = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                rects.push(ribbon_cell(ui, cell, drawn(), "Line  (L)", true, false).rect);
+                let split = ribbon_split_cell(ui, cell, drawn(), "Circle  (C)", "All methods", true, false);
+                rects.push(split.main.rect);
+                rects.push(split.caret.rect);
+                rects.push(ribbon_cell(ui, cell, drawn(), "Arc  (A)", true, false).rect);
+            });
+        });
+        output.drop_without_applying_deltas();
+        let [plain, main, caret, after] = [rects[0], rects[1], rects[2], rects[3]];
+        for (left, right) in [(plain, main), (main, caret), (caret, after)] {
+            assert!((left.right() - right.left()).abs() < 0.01, "{left:?} and {right:?} do not touch");
+        }
+        assert_eq!(main.width(), cell, "the face beside a plain cell is the same cell");
+        assert_eq!(main.width(), plain.width(), "two cells of one row are one width");
+        assert_eq!(main.width(), after.width(), "the cell after the caret is the same cell");
+    }
+
+    #[test]
+    fn a_plain_cell_holds_its_glyph_with_the_air_a_split_cell_does() {
+        // One glyph size in one row: the split cell's face is the plain cell, so the two draw the
+        // glyph in the same place relative to their faces (X36).
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut images = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ribbon_cell(ui, crate::theme::RIBBON_CELL_WIDTH, drawn(), "Line  (L)", true, false);
+                ribbon_split_cell(
+                    ui,
+                    crate::theme::RIBBON_CELL_WIDTH,
+                    drawn(),
+                    "Circle  (C)",
+                    "All methods",
+                    true,
+                    false,
+                );
+            });
+        });
+        for clipped in &output.shapes {
+            if let egui::epaint::Shape::Mesh(mesh) = &clipped.shape {
+                images.push(mesh.calc_bounds());
+            }
+        }
+        output.drop_without_applying_deltas();
+        assert_eq!(images.len(), 2, "one glyph per cell drew an image: {images:?}");
+        let pitch = crate::theme::RIBBON_CELL_WIDTH;
+        assert!(
+            (images[1].center().x - images[0].center().x - pitch).abs() < 0.01,
+            "the glyphs are one cell apart: {images:?}"
+        );
+        assert_eq!(images[0].width(), images[1].width(), "a split cell draws the same glyph size");
     }
 
     #[test]
