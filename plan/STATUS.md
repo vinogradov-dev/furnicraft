@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=- state=idle base=114d79e updated=2026-11-14
+STATE: milestone=M7 phase=T task=- state=idle base=49487f9 updated=2026-11-14
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -14,7 +14,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   corner moves freely or along the picked segment (0075), a fresh extrusion pulls its height from an
   arrow previewing a wireframe prism (X19), and S5's frame rule reached a drawing, a group and a panel
   (0082, 0083), proved once in `frame_contract.rs`; cameras and lights are scene objects (0036).
-  ADR 0105 makes the three stances one flat frame turned; X35 stands the fill post in it.
+  ADR 0105 makes the three stances one flat frame turned; X35 stands the fill post in it, and N11
+  gives a panel end a bevel angle about its outline edge (0107, schema 24).
 - S7 audited the design rules and filed S8–S22 under `plan/refactor.md`: S8–S13 split `geom` and gave
   the tests one fixture definition (ADR 0084), S14–S17 `engine/panel_cmds`, `scene`'s camera and ray
   and `render`'s pipelines, S18–S19 the document rules and the `Editor` out of `ui/lib.rs` (50 lines),
@@ -55,8 +56,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-Nothing is scheduled yet: the order package (K2) is the next task in ## Now, and the fill's beveled
-end (N12) follows the niche tasks.
+Nothing is scheduled: N12 is the next task to take, then K2, K3, K4 and R1.
 
 ## Index
 

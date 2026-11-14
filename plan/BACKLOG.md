@@ -109,35 +109,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
-- `[ ]` **N11** a panel's end can be given a bevel angle about its edge
-  Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end
-   face must lie in the wall's plane. The panel is one region extruded along its thickness, so
-   every end face is perpendicular to the two large faces and the only angle it can express is
-   in its own plane; a contour cannot hold the skew. The owner named this as the second
-   difficulty, and without the parameter the fill can only leave a gap or cut in.
-  Shape: `Panel` stores an optional bevel per outline edge: a signed angle in millidegrees
-   about the edge's line, tilting the end face across the thickness. The outline is the edge on
-   face B; face A's edge is set back by `thickness * tan beta`, so a positive angle removes
-   material and the board never grows past its outline, which keeps its nominal size its stock
-   size. The record is keyed by a stable source, an `EdgeId` of the nominal rectangle or a
-   `ContourSegmentId` of a ring, one per source, line segments only, with the angle capped
-   below 89 degrees and the resolved body required to keep one piece and a positive thickness.
-   `param` folds one `PlanStep::Difference` per bevel with a wedge cutter: a small triangle in
-   the plane across the edge, from the B edge to the A edge, extruded along the segment with
-   the usual 1 µm overshoot through `extrusion_plan`; the core region, the analytic rectangle
-   path, the cutouts and the other edges' bands are untouched. A beveled edge cannot carry a
-   band, because the band would follow the nominal edge, so `panel.bevel.set` refuses a banded
-   edge and the banding command refuses a beveled one, each with a sentence. The card gains the
-   angle field and a clear action; the commands are `panel.bevel.set` and `panel.bevel.clear`;
-   the schema moves to 24 and the goldens follow (ADR 0096); a new ADR records the parameter
-   and why the outline is the B face.
-  Done: Tests: a 45-degree bevel on a 100 x 50 x 18 panel removes the expected wedge and keeps
-   the nominal size; a second bevel on another edge accumulates; an arc segment, a duplicate
-   source, a banded edge and an angle at or past the cap are refused with typed errors; banding
-   a beveled edge is refused; the card writes and clears the value; a save/load golden carries
-   the record and a schema other than 24 is a readable error; one command is one undo entry;
-   `cargo xtask ci` is green.
-  `files: crates/model/src/panel/mod.rs, crates/model/src/panel_features.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/mod.rs, crates/engine/src/commands.rs, crates/param/src/lib.rs, crates/param/src/machining.rs, crates/ui/src/panel_card.rs, crates/text/src/messages.rs, crates/project/tests/golden, crates/project/tests/scene_file.rs, docs/domain/panels.md, docs/decisions/README.md`
 - `[ ]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
   Why: This is the point of the bevel: once a part takes the niche's shape, a shelf or a post
    in a niche bounded by boards turned in space must meet those boards with its end face in
@@ -168,6 +139,36 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md`
 
 ## Done
+
+- `[x]` **N11** a panel's end can be given a bevel angle about its edge
+  Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end
+   face must lie in the wall's plane. The panel is one region extruded along its thickness, so
+   every end face is perpendicular to the two large faces and the only angle it can express is
+   in its own plane; a contour cannot hold the skew. The owner named this as the second
+   difficulty, and without the parameter the fill can only leave a gap or cut in.
+  Shape: `Panel` stores an optional bevel per outline edge: a signed angle in millidegrees
+   about the edge's line, tilting the end face across the thickness. The outline is the edge on
+   face B; face A's edge is set back by `thickness * tan beta`, so a positive angle removes
+   material and the board never grows past its outline, which keeps its nominal size its stock
+   size. The record is keyed by a stable source, an `EdgeId` of the nominal rectangle or a
+   `ContourSegmentId` of a ring, one per source, line segments only, with the angle capped
+   below 89 degrees and the resolved body required to keep one piece and a positive thickness.
+   `param` folds one `PlanStep::Difference` per bevel with a wedge cutter: a small triangle in
+   the plane across the edge, from the B edge to the A edge, extruded along the segment with
+   the usual 1 µm overshoot through `extrusion_plan`; the core region, the analytic rectangle
+   path, the cutouts and the other edges' bands are untouched. A beveled edge cannot carry a
+   band, because the band would follow the nominal edge, so `panel.bevel.set` refuses a banded
+   edge and the banding command refuses a beveled one, each with a sentence. The card gains the
+   angle field and a clear action; the commands are `panel.bevel.set` and `panel.bevel.clear`;
+   the schema moves to 24 and the goldens follow (ADR 0096); a new ADR records the parameter
+   and why the outline is the B face.
+  Done: Tests: a 45-degree bevel on a 100 x 50 x 18 panel removes the expected wedge and keeps
+   the nominal size; a second bevel on another edge accumulates; an arc segment, a duplicate
+   source, a banded edge and an angle at or past the cap are refused with typed errors; banding
+   a beveled edge is refused; the card writes and clears the value; a save/load golden carries
+   the record and a schema other than 24 is a readable error; one command is one undo entry;
+   `cargo xtask ci` is green.
+  `files: crates/model/src/panel/mod.rs, crates/model/src/panel_features.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/mod.rs, crates/engine/src/commands.rs, crates/param/src/lib.rs, crates/param/src/machining.rs, crates/ui/src/panel_card.rs, crates/text/src/messages.rs, crates/project/tests/golden, crates/project/tests/scene_file.rs, docs/domain/panels.md, docs/decisions/README.md` — `82f61db`
 
 - `[x]` **N10** the fill has two modes and prefers a standard panel when the section allows one
   Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
