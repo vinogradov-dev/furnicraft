@@ -543,6 +543,46 @@ impl Project {
         Ok(id)
     }
 
+    /// Adds a panel with the outline a tool measured, in one revision.
+    ///
+    /// A stored ring is rebased exactly as [`Project::add_panel_contour`] does it, so the panel's
+    /// zero corner stays the ring's base corner. A rectangle outline keeps its nominal size and may
+    /// carry corner treatments; the generator that will draw it runs here, so a cut that consumes a
+    /// whole edge is refused before the panel enters the tree rather than on the first frame. One
+    /// call is one revision, which is what makes a fill click one undo entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_panel_with_outline(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        nominal_size: PanelNominalSize,
+        outline: PanelOutline,
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
+        let outline = match outline {
+            PanelOutline::Contour { contour } => {
+                return self.add_panel_contour(parent, name, &contour, material, last_known_thickness, placement);
+            }
+            outline => outline,
+        };
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let mut panel = Panel::new(id, name, nominal_size, material, last_known_thickness, placement)?;
+        panel.set_outline(outline);
+        panel.nominal_contour()?;
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Panel(panel));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
     /// Adds a panel whose outline is a contour ring selected in the scene.
     ///
     /// The ring is rebased so its bounds base corner is the panel-local zero (ADR 0083): the ring

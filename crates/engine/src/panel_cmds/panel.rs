@@ -15,8 +15,8 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{
-    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, Panel, PanelNominalSize, Placement, Project,
-    ProjectError, PropertyValue, SYSTEM_CLASS,
+    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, Panel, PanelNominalSize, PanelOutline, Placement,
+    Project, ProjectError, PropertyValue, SYSTEM_CLASS,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -58,10 +58,12 @@ pub struct PanelCreate {
     ///
     /// A ring makes the new panel a contour panel from its first revision (ADR 0042): the ring is
     /// the panel's own outline anchored at its zero corner, and `nominal_size` must be the size of
-    /// its bounds. A plain panel carries no ring and keeps the nominal rectangle. The empty-space
-    /// tool creates a shelf in a splayed niche this way, in the same one command and one undo entry.
+    /// its bounds. A rectangle outline may carry corner treatments — the fill tool's classifier
+    /// hands over the chamfers or radii the walls leave — and keeps its nominal size. The
+    /// empty-space tool creates a shaped part this way, in the same one command and one undo entry,
+    /// so a click is never a create followed by a corner-feature change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outline: Option<Contour>,
+    pub outline: Option<PanelOutline>,
 }
 
 impl PanelCreate {
@@ -336,8 +338,8 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
         catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
     let thickness = material.nominal_thickness();
     let id = match params.outline.as_ref() {
-        Some(outline) => {
-            let anchored = Panel::anchored_contour(outline).map_err(ProjectError::from)?;
+        Some(PanelOutline::Contour { contour }) => {
+            let anchored = Panel::anchored_contour(contour).map_err(ProjectError::from)?;
             let measured = Panel::contour_size(&anchored).map_err(ProjectError::from)?;
             if measured != params.nominal_size {
                 return Err(CommandError::InvalidParams {
@@ -354,6 +356,15 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
                 params.placement,
             )?
         }
+        Some(outline) => project.add_panel_with_outline(
+            params.parent,
+            params.name,
+            params.nominal_size,
+            outline.clone(),
+            Some(params.material),
+            thickness,
+            params.placement,
+        )?,
         None => project.add_panel(
             params.parent,
             params.name,

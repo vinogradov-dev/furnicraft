@@ -23,8 +23,8 @@ use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ClassCode, Contour, Envelope, Id, LightKind, MaterialId, PanelNominalSize, Placement, Primitive,
-    Project,
+    CameraProjection, ClassCode, Envelope, Id, LightKind, MaterialId, PanelNominalSize, PanelOutline, Placement,
+    Primitive, Project,
 };
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
@@ -126,8 +126,10 @@ impl Editor {
     /// click is one undo entry rather than a create followed by an assignment. The material stays
     /// the catalogue's first, as it is for every created panel.
     ///
-    /// A ring makes the part a contour panel whose outline is that ring, which is how a shelf takes
-    /// the trapezoid a splayed niche reserves (ADR 0042, ADR 0099); a rectangle panel carries none.
+    /// The outline is what the part is born with: a ring makes it a contour panel (ADR 0042), a
+    /// rectangle may carry the corner cuts the fill tool classified, and `None` keeps the plain
+    /// rectangle. A shelf in a splayed niche takes the trapezoid it was measured against that way
+    /// (ADR 0099), in the same one command and one undo entry as the click itself.
     #[allow(clippy::too_many_arguments)]
     pub fn create_panel_sized(
         &mut self,
@@ -135,7 +137,7 @@ impl Editor {
         parent: Id,
         name: String,
         nominal_size: PanelNominalSize,
-        outline: Option<Contour>,
+        outline: Option<PanelOutline>,
         placement: Placement,
         class: Option<ClassCode>,
     ) -> Result<(), String> {

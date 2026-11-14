@@ -26,7 +26,9 @@ use std::f64::consts::FRAC_PI_2;
 
 use eframe::egui::{self, FontId, Pos2, Rect, Stroke, Ui};
 use furnicraft_geom::{DQuat, DVec2, DVec3};
-use furnicraft_model::{Contour, Fill, Id, Niche, NicheRefusal, Panel, PanelNominalSize, Placement, Project};
+use furnicraft_model::{
+    Contour, Fill, Id, Niche, NicheRefusal, Panel, PanelNominalSize, PanelOutline, Placement, Project,
+};
 use furnicraft_scene::{Camera, Ray};
 use furnicraft_ui::theme;
 use furnicraft_units::Length;
@@ -41,8 +43,8 @@ const MEASURE_STEP_MM: f64 = 0.5;
 pub(crate) struct FillGhost {
     /// The open product the panel lands in.
     pub(crate) parent: Id,
-    /// The ring the panel is born with, when the niche's section is not a rectangle.
-    pub(crate) outline: Option<Contour>,
+    /// The outline the panel is born with: the rectangle, or the ring a shaped void leaves.
+    pub(crate) outline: PanelOutline,
     /// The panel's nominal length and width, exactly as the command will store them.
     pub(crate) nominal_size: PanelNominalSize,
     /// The panel's placement in the parent frame, exactly as the command will store it.
@@ -296,9 +298,9 @@ pub(crate) fn plan_at(
     let world_placement = Placement::compose(parent_world, placement)
         .map_err(|_| "The part cannot be placed in the open product.".to_owned())?;
     let base = |x: f64, y: f64| world_placement.transform_point(DVec3::new(x, y, 0.0));
-    let world = match outline.as_ref() {
-        Some(ring) => ring_corners(ring, base)?,
-        None => vec![(0.0, 0.0), (length, 0.0), (length, width), (0.0, width)]
+    let world = match &outline {
+        PanelOutline::Contour { contour } => ring_corners(contour, base)?,
+        PanelOutline::Rect { .. } => vec![(0.0, 0.0), (length, 0.0), (length, width), (0.0, width)]
             .into_iter()
             .map(|(x, y)| base(x, y))
             .collect(),
@@ -350,7 +352,7 @@ fn shelf(
     local: DVec3,
     gap: f64,
     free: Option<f64>,
-) -> Result<(Option<Contour>, PanelNominalSize, Placement), String> {
+) -> Result<(PanelOutline, PanelNominalSize, Placement), String> {
     let low = niche.local_min.z;
     let high = niche.local_max().z - gap;
     if high < low {
@@ -378,7 +380,7 @@ fn post(
     local: DVec3,
     gap: f64,
     free: Option<f64>,
-) -> Result<(Option<Contour>, PanelNominalSize, Placement), String> {
+) -> Result<(PanelOutline, PanelNominalSize, Placement), String> {
     let low = niche.local_min.x;
     let high = niche.local_max().x - gap;
     if high < low {
@@ -402,7 +404,7 @@ fn post(
 /// A footprint that is exactly the rectangle around it keeps the rectangle panel; anything else is a
 /// contour panel whose ring is the footprint itself, anchored at its own zero corner. The answer
 /// carries the corner the panel is placed at, in the footprint's own `(u, v)` axes.
-fn outline_of(points: Vec<DVec2>) -> Result<(Option<Contour>, PanelNominalSize, DVec2), String> {
+fn outline_of(points: Vec<DVec2>) -> Result<(PanelOutline, PanelNominalSize, DVec2), String> {
     let Some(first) = points.first().copied() else {
         return Err(place_too_small());
     };
@@ -414,7 +416,7 @@ fn outline_of(points: Vec<DVec2>) -> Result<(Option<Contour>, PanelNominalSize, 
             length_of(high.y - low.y).ok_or_else(place_too_small)?,
         )
         .map_err(|error| error.to_string())?;
-        return Ok((None, nominal_size, low));
+        return Ok((PanelOutline::Rect { corner_features: Vec::new(), edge_bows: Vec::new() }, nominal_size, low));
     }
     let ring = ring_of(&points)?;
     let outline = Panel::anchored_contour(&ring).map_err(|error| error.to_string())?;
@@ -424,7 +426,7 @@ fn outline_of(points: Vec<DVec2>) -> Result<(Option<Contour>, PanelNominalSize, 
         Length::from_micrometres(min[0]).millimetres_f64(),
         Length::from_micrometres(min[1]).millimetres_f64(),
     );
-    Ok((Some(outline), nominal_size, corner))
+    Ok((PanelOutline::Contour { contour: outline }, nominal_size, corner))
 }
 
 /// Whether a footprint is exactly the rectangle around it.
@@ -663,7 +665,10 @@ mod tests {
         assert_eq!(ghost.placement.translation(), DVec3::new(0.0, 0.0, 351.0), "the height moves in whole mm");
         assert_eq!(ghost.size_mm, DVec3::new(600.0, 560.0, 18.0));
         assert_eq!(ghost.parent, product);
-        assert!(ghost.outline.is_none(), "a rectangular void keeps the rectangle panel");
+        assert!(
+            !ghost.outline.has_contour_features() && ghost.outline.contour().is_none(),
+            "a rectangular void keeps the rectangle panel"
+        );
         // The corners are the panel's box at that placement.
         assert_eq!(ghost.world[0], DVec3::new(0.0, 0.0, 351.0));
         assert_eq!(ghost.world[2], DVec3::new(600.0, 560.0, 351.0));
@@ -722,7 +727,7 @@ mod tests {
         let (project, product) = splayed_piece();
         let ghost = plan(&project, product, DVec3::new(300.0, 280.0, 360.0), Fill::WidthAndDepth, millimetres(18))
             .expect("a shelf fills the splayed void");
-        let outline = ghost.outline.as_ref().expect("the shelf takes the measured section");
+        let outline = ghost.outline.contour().expect("the shelf takes the measured section");
         assert_eq!(ghost.nominal_size.length(), millimetres(400));
         assert_eq!(ghost.nominal_size.width(), millimetres(560));
         assert_eq!(ghost.placement.translation(), DVec3::new(100.0, 0.0, 360.0), "the section's own corner");
@@ -750,7 +755,7 @@ mod tests {
         let (project, product) = splayed_piece();
         let ghost = plan(&project, product, DVec3::new(150.0, 200.0, 360.0), Fill::HeightAndDepth, millimetres(18))
             .expect("a post stands against the splayed wall");
-        assert!(ghost.outline.is_none(), "the slab's depth leaves an honest rectangle");
+        assert!(ghost.outline.contour().is_none(), "the slab's depth leaves an honest rectangle");
         assert_eq!(ghost.nominal_size.length(), millimetres(720), "the void's height is the post's length");
         let depth = ghost.nominal_size.width().millimetres_f64();
         assert!((depth - 280.0).abs() < 1.0, "the depth the slab really has, not the void's 560: {depth}");
@@ -764,7 +769,7 @@ mod tests {
         leaned_ceiling(&mut project, product);
         let ghost = plan(&project, product, DVec3::new(300.0, 540.0, 590.0), Fill::WidthAndDepth, millimetres(18))
             .expect("a shelf fits under the leaned ceiling");
-        assert!(ghost.outline.is_none(), "the ceiling cuts the depth, not the corners");
+        assert!(ghost.outline.contour().is_none(), "the ceiling cuts the depth, not the corners");
         assert_eq!(ghost.placement.translation().z, 590.0);
         assert!(
             ghost.nominal_size.width() < millimetres(560),
@@ -780,7 +785,7 @@ mod tests {
         let ghost = plan(&project, product, DVec3::new(300.0, 0.0, 360.0), Fill::WidthAndDepth, millimetres(18))
             .expect("the near face is inside the void");
         assert_eq!(ghost.nominal_size.length(), millimetres(600));
-        assert!(ghost.outline.is_none());
+        assert!(ghost.outline.contour().is_none());
     }
 
     #[test]

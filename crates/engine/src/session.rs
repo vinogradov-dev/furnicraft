@@ -346,8 +346,8 @@ mod tests {
     use furnicraft_model::{
         Catalog, ClassCode, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth,
         CutoutShape, EdgeBandingMaterial, EdgeId, Envelope, FaceSide, FrameAnchor, Geometry, Id, MachiningAnchor,
-        MachiningParams, PanelContourError, PanelMaterial, PanelNominalSize, PivotLocal, Placement, ProjectError,
-        PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
+        MachiningParams, PanelContourError, PanelMaterial, PanelNominalSize, PanelOutline, PivotLocal, Placement,
+        ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -590,7 +590,7 @@ mod tests {
                 .with_translation(millimetres_length(100), Length::ZERO, millimetres_length(350))
                 .expect("a placement"),
             class: Some(fill),
-            outline: Some(ring.clone()),
+            outline: Some(PanelOutline::Contour { contour: ring.clone() }),
         };
         let params = json_params(&request);
         let before = session.project().revision();
@@ -610,6 +610,77 @@ mod tests {
 
         session.undo().expect("one undo step");
         assert_eq!(session.project().panel(id), None, "one undo takes the whole part back");
+    }
+
+    #[test]
+    fn a_classified_panel_is_born_with_its_corner_cut_in_one_undo_step() {
+        // The fill tool's classifier finds that a cut section is still a rectangle with one chamfer:
+        // the command creates that standard panel — resize, card and nominal fields included — with
+        // the treatment already stored, so the click is one entry rather than a create and an edit.
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let size = PanelNominalSize::new(millimetres_length(600), millimetres_length(400)).expect("a size");
+        let feature = furnicraft_model::CornerFeature::new(
+            RectCorner::TopRight.id(),
+            CornerFeatureKind::Chamfer { incoming: millimetres_length(15), outgoing: millimetres_length(40) },
+        )
+        .expect("a chamfer");
+        let request = PanelCreate {
+            parent: product,
+            name: "Shelf".to_owned(),
+            nominal_size: size,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY,
+            class: None,
+            outline: Some(PanelOutline::Rect { corner_features: vec![feature], edge_bows: Vec::new() }),
+        };
+        let before = session.project().revision();
+        let id = session
+            .dispatch("panel.create", &json_params(&request))
+            .expect("create the chamfered shelf")
+            .created_id()
+            .expect("an id");
+        let panel = session.project().panel(id).expect("a panel");
+        assert!(!panel.is_contour(), "a treated rectangle keeps the standard panel");
+        assert_eq!(panel.corner_feature(RectCorner::TopRight.id()), Some(feature), "the cut is stored already");
+        assert_eq!(panel.nominal_size(), size, "and the nominal size is the rectangle's own");
+        assert!(session.project().revision() > before);
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole part back");
+    }
+
+    #[test]
+    fn a_corner_cut_that_consumes_an_edge_is_refused_before_the_document_changes() {
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let size = PanelNominalSize::new(millimetres_length(100), millimetres_length(100)).expect("a size");
+        // The bottom edge is 100 long and the two corner cuts take 40 and 60 of it.
+        let features = [(RectCorner::BottomLeft, 40, 40), (RectCorner::BottomRight, 60, 20)]
+            .into_iter()
+            .map(|(corner, incoming, outgoing)| {
+                furnicraft_model::CornerFeature::new(
+                    corner.id(),
+                    CornerFeatureKind::Chamfer {
+                        incoming: millimetres_length(incoming),
+                        outgoing: millimetres_length(outgoing),
+                    },
+                )
+                .expect("a chamfer")
+            })
+            .collect::<Vec<_>>();
+        let request = PanelCreate {
+            parent: product,
+            name: "Shelf".to_owned(),
+            nominal_size: size,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY,
+            class: None,
+            outline: Some(PanelOutline::Rect { corner_features: features, edge_bows: Vec::new() }),
+        };
+        let before = session.project().revision();
+        assert!(session.dispatch("panel.create", &json_params(&request)).is_err(), "the cut leaves no edge");
+        assert_eq!(session.project().revision(), before, "the refusal writes nothing");
     }
 
     /// A whole millimetre as the document's length.

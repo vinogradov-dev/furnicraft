@@ -684,11 +684,11 @@ fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
 
     let document = harness.app.tabs.active();
     let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
-    let outline = ghost.outline.clone().expect("the ghost carries the measured polygon");
+    let outline = ghost.outline.contour().cloned().expect("the ghost carries the measured polygon");
     let created = document.editor.selected_node().expect("the new part is selected");
     let panel = document.session.project().panel(created).expect("the click created a panel");
     assert!(panel.is_contour(), "the shelf takes the polygon, not the rectangle around it");
-    assert_eq!(Some(outline), panel.outline_contour().cloned(), "the stored ring is the ghost's ring");
+    assert_eq!(Some(&outline), panel.outline_contour(), "the stored ring is the ghost's ring");
     assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
     assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
     assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
