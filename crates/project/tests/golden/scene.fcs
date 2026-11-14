@@ -2,8 +2,8 @@
   "format": "furnicraft.scene",
   "format_version": 1,
   "document": {
-    "schema_version": 23,
-    "revision": 3,
+    "schema_version": 24,
+    "revision": 4,
     "next_id": 11,
     "root": {
       "id": 1,
@@ -97,6 +97,15 @@
             "band_order": [
               {
                 "edge": 1
+              }
+            ],
+            "bevels": [
+              {
+                "source": {
+                  "kind": "rect",
+                  "edge": 4
+                },
+                "angle": 45000
               }
             ],
             "properties": {}
@@ -388,6 +397,7 @@
                   "corner_banding": [],
                   "ring_banding": [],
                   "band_order": [],
+                  "bevels": [],
                   "properties": {}
                 }
               }

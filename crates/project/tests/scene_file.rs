@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use furnicraft_model::{Container, Id, LightKind, NodeQuery, Placement, Project, StructuralKind};
+use furnicraft_model::{
+    Container, EdgeBevel, EdgeId, EdgeRef, Id, LightKind, NodeQuery, Placement, Project, StructuralKind,
+};
 use furnicraft_project::{MAX_SCENE_BYTES, SceneFile, SceneFileError};
-use furnicraft_units::Length;
+use furnicraft_units::{Degrees, Length};
 
 const GOLDEN: &str = include_str!("golden/scene.fcs");
 
@@ -75,6 +77,12 @@ fn the_golden_file_carries_every_node_kind() {
     let panel = document.panel(id(2)).expect("the shelf loads");
     assert_eq!(panel.machining().len(), 1, "the shelf carries one machining record");
     assert_eq!(panel.edge_banding().len(), 1, "the shelf carries one banding strip");
+    assert_eq!(panel.bevels().len(), 1, "the shelf carries one end bevel");
+    assert_eq!(
+        panel.bevel_at(EdgeRef::Rect { edge: EdgeId::new(4).expect("edge") }).map(EdgeBevel::angle),
+        Some(Degrees::from_millidegrees(45_000)),
+        "the bevel angle survives the file"
+    );
     assert_eq!(panel.nominal_size().length(), Length::from_millimetres(700).expect("length"));
 
     let top = document.object(id(3)).expect("the extrusion loads");

@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use furnicraft_model::{
-    CameraNode, CameraProjection, Constructive, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide,
-    Geometry, Id, LightKind, LightNode, MaterialId, Object, Panel, PanelNominalSize, PanelRect, Path, Placement,
-    Primitive, Project,
+    CameraNode, CameraProjection, Constructive, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBevel, EdgeId,
+    EdgeRef, FaceSide, Geometry, Id, LightKind, LightNode, MaterialId, Object, Panel, PanelNominalSize, PanelRect,
+    Path, Placement, Primitive, Project,
 };
 use furnicraft_project::SceneFile;
-use furnicraft_units::Length;
+use furnicraft_units::{Degrees, Length};
 use serde_json::Value;
 
 fn millimetres(value: i64) -> Length {
@@ -117,6 +117,13 @@ fn scene() -> SceneFile {
             FaceSide::A,
         )
         .expect("a cutout on the shelf");
+    project
+        .set_panel_bevel(
+            id(2),
+            EdgeBevel::new(EdgeRef::Rect { edge: EdgeId::new(4).expect("edge") }, Degrees::from_millidegrees(45_000))
+                .expect("a 45 degree end bevel"),
+        )
+        .expect("bevel on the shelf");
     project.set_active_camera(Some(id(6))).expect("an active camera");
 
     let mut extra = BTreeMap::new();

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    BandingSpec, ContourSegmentId, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel,
-    PanelDimensionError, PanelNominalSize, PanelOutline, RectCorner, RectEdge, RingBanding, VertexId,
+    BandingSpec, ContourSegmentId, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBevel, EdgeId, EdgeRef, Length,
+    Panel, PanelDimensionError, PanelNominalSize, PanelOutline, RectCorner, RectEdge, RingBanding, VertexId,
 };
 
 /// The ring of a contour panel as the nominal outline, with one source per segment.
@@ -120,6 +120,7 @@ pub struct BakedOutline {
     contour: crate::Contour,
     banding: Vec<RingBanding>,
     order: Vec<SegmentSource>,
+    bevels: Vec<EdgeBevel>,
 }
 
 impl BakedOutline {
@@ -136,6 +137,11 @@ impl BakedOutline {
     /// The banded ring segments in application order; the last one is drawn on top.
     pub fn order(&self) -> &[SegmentSource] {
         &self.order
+    }
+
+    /// The end bevels, each moved onto the ring segment its edge became.
+    pub fn bevels(&self) -> &[EdgeBevel] {
+        &self.bevels
     }
 }
 
@@ -280,7 +286,22 @@ impl Panel {
             banding.push(band);
             order.push(SegmentSource::Ring(segment));
         }
-        Ok(BakedOutline { contour, banding, order })
+
+        // A bevel names the same segment a band does, so the conversion moves it the same way. An
+        // edge that produced no straight ring segment (a bowed edge, whose arc has no plane end
+        // face) has already been refused by the panel's own bevel rule, so a missing segment here
+        // can only be a corner or an arc and is dropped with the feature it belonged to.
+        let mut bevels = Vec::with_capacity(self.bevels.len());
+        for bevel in &self.bevels {
+            let EdgeRef::Rect { edge } = bevel.source() else {
+                continue;
+            };
+            let Some(segment) = ring_source_id(&contour, &sources, SegmentSource::Edge(edge)) else {
+                continue;
+            };
+            bevels.push(bevel.on_source(EdgeRef::Ring { segment }));
+        }
+        Ok(BakedOutline { contour, banding, order, bevels })
     }
 
     /// Groups the nominal outline into maximal tangent-continuous paths.

@@ -5,7 +5,9 @@
 //! `furnicraft-engine` reach the panel through the crate API and mutate it through the
 //! crate-internal setters here.
 
-use furnicraft_geom::{DVec3, Region};
+use std::collections::HashSet;
+
+use furnicraft_geom::{DVec3, Region, Segment, subtract_regions};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -34,7 +36,7 @@ pub(crate) use machining::core_violation_of;
 
 use crate::panel::banding::{normalize_band_order, validate_corner_banding};
 use crate::panel::geometry::validate_dimension;
-use crate::panel_features::{CornerFeature, EdgeBow, validate_contour_features};
+use crate::panel_features::{CornerFeature, EdgeBevel, EdgeBow, validate_contour_features};
 use crate::{
     Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MachiningId, MaterialId, PivotLocal,
     Placement, ProjectError, Properties, PropertyError, PropertyValue, VertexId,
@@ -125,6 +127,7 @@ pub struct Panel {
     ring_banding: Vec<RingBanding>,
     /// Banded segments in application order; the last one is drawn on top.
     band_order: Vec<SegmentSource>,
+    bevels: Vec<EdgeBevel>,
     properties: Properties,
 }
 
@@ -163,6 +166,7 @@ impl Panel {
             corner_banding: Vec::new(),
             ring_banding: Vec::new(),
             band_order: Vec::new(),
+            bevels: Vec::new(),
             properties: Properties::new(),
         })
     }
@@ -196,6 +200,7 @@ impl Panel {
             corner_banding: Vec::new(),
             ring_banding: Vec::new(),
             band_order: Vec::new(),
+            bevels: Vec::new(),
             properties: Properties::new(),
         })
     }
@@ -443,6 +448,143 @@ impl Panel {
     /// Whether any edge, corner or ring segment is banded.
     pub fn has_banding(&self) -> bool {
         !self.edge_banding.is_empty() || !self.corner_banding.is_empty() || !self.ring_banding.is_empty()
+    }
+
+    /// Whether one outline edge carries a band.
+    ///
+    /// A beveled edge cannot: the band would follow the nominal edge and hang in the air, so the two
+    /// records exclude each other on the same source.
+    pub fn has_band_on(&self, source: EdgeRef) -> bool {
+        match source {
+            EdgeRef::Rect { edge } => self.edge_banding.iter().any(|band| band.edge() == edge),
+            EdgeRef::Ring { segment } => self.ring_banding.iter().any(|band| band.segment() == segment),
+        }
+    }
+
+    /// End bevels in application order, one per outline edge.
+    pub fn bevels(&self) -> &[EdgeBevel] {
+        &self.bevels
+    }
+
+    /// The bevel on one outline edge, if present.
+    pub fn bevel_at(&self, source: EdgeRef) -> Option<EdgeBevel> {
+        self.bevels.iter().copied().find(|bevel| bevel.source() == source)
+    }
+
+    /// Replaces the bevel on its source, keeping the list in application order.
+    pub(crate) fn upsert_bevel(&mut self, bevel: EdgeBevel) {
+        self.bevels.retain(|existing| existing.source() != bevel.source());
+        self.bevels.push(bevel);
+    }
+
+    /// Removes the bevel on one source; returns whether it was there.
+    pub(crate) fn remove_bevel(&mut self, source: EdgeRef) -> bool {
+        let before = self.bevels.len();
+        self.bevels.retain(|existing| existing.source() != source);
+        self.bevels.len() != before
+    }
+
+    /// Replaces every bevel, used when a rectangle outline bakes into a ring.
+    pub(crate) fn set_bevels(&mut self, bevels: Vec<EdgeBevel>) {
+        self.bevels = bevels;
+    }
+
+    /// Checks that every stored bevel names a straight, unbanded edge of this panel's own outline.
+    ///
+    /// This is the record rule a loaded file must satisfy: an angle is validated by
+    /// [`EdgeBevel::new`], and here the source must exist, be a line (an arc's end face is a ruled
+    /// surface, not a plane) and carry no band.
+    pub(crate) fn validate_bevels(&self) -> Result<(), PanelError> {
+        let ring = self.outline.contour();
+        let mut seen = HashSet::new();
+        for bevel in &self.bevels {
+            let source = bevel.source();
+            if !seen.insert(source) {
+                return Err(PanelError::DuplicateBevel { on: source });
+            }
+            match source {
+                EdgeRef::Rect { edge } => {
+                    if ring.is_some() || !(1..=4).contains(&edge.get()) {
+                        return Err(PanelError::UnsupportedBevel { on: source });
+                    }
+                    if self.edge_bow(edge).is_some() {
+                        return Err(PanelError::CurvedBevel { on: source });
+                    }
+                }
+                EdgeRef::Ring { segment } => {
+                    let Some(ring) = ring else {
+                        return Err(PanelError::UnsupportedBevel { on: source });
+                    };
+                    let Some(stored) = ring.segment(segment) else {
+                        return Err(PanelError::UnsupportedBevel { on: source });
+                    };
+                    if stored.is_arc() {
+                        return Err(PanelError::CurvedBevel { on: source });
+                    }
+                }
+            }
+            if self.has_band_on(source) {
+                return Err(PanelError::BandedBevel { on: source });
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks whether the bevels leave the far face as one positive piece.
+    ///
+    /// The body at height `z` is the core eroded by `z * tan(angle)` along every beveled edge, so
+    /// the smallest face decides: the check erodes the core by every bevel's full setback and
+    /// requires one piece with positive area. `Some` means the angles would empty the panel.
+    ///
+    /// `nominal_size` is the size `geometry` was resolved for, so a resize candidate is checked
+    /// against the outline it would have and not the stored one.
+    pub fn bevel_violation(
+        &self,
+        nominal_size: PanelNominalSize,
+        geometry: &PanelGeometry,
+    ) -> Result<Option<CoreViolation>, ProjectError> {
+        if self.bevels.is_empty() {
+            return Ok(None);
+        }
+        let segments = self.nominal_segments_for(nominal_size)?;
+        let mut bands = Vec::with_capacity(self.bevels.len());
+        for bevel in &self.bevels {
+            let want = match bevel.source() {
+                EdgeRef::Rect { edge } => SegmentSource::Edge(edge),
+                EdgeRef::Ring { segment } => SegmentSource::Ring(segment),
+            };
+            let Some((Segment::Line(line), _)) = segments.iter().find(|(_, source)| *source == want) else {
+                continue;
+            };
+            let Some(setback) = bevel.setback(geometry.thickness()) else {
+                return Err(ProjectError::BevelRemovesBody { panel: self.id });
+            };
+            let distance = setback.millimetres_f64();
+            if distance <= 0.0 {
+                continue;
+            }
+            // The ring runs counter-clockwise, so the left normal points into the body.
+            let inward = line.left_normal() * distance;
+            let (start, end) = (line.start(), line.end());
+            let points = vec![start, end, end + inward, start + inward];
+            let band = Region::from_loops(points, Vec::new())
+                .map_err(|_| ProjectError::BevelRemovesBody { panel: self.id })?;
+            bands.push(band);
+        }
+        if bands.is_empty() {
+            return Ok(None);
+        }
+        let remaining = subtract_regions(std::slice::from_ref(geometry.core_region()), &bands)?;
+        if remaining.is_empty() {
+            return Ok(Some(CoreViolation::Removed));
+        }
+        if remaining.len() > 1 {
+            return Ok(Some(CoreViolation::Split));
+        }
+        if remaining.first().is_some_and(|region| region.area() <= 0.0) {
+            return Ok(Some(CoreViolation::Removed));
+        }
+        Ok(None)
     }
 
     /// Corner treatments in application order.
@@ -736,6 +878,30 @@ pub enum PanelError {
         /// The rejected anchor.
         anchor: MachiningAnchor,
     },
+    /// Two bevels name the same outline edge.
+    #[error("panel has duplicate bevel on {on}")]
+    DuplicateBevel {
+        /// The duplicated outline edge.
+        on: EdgeRef,
+    },
+    /// A bevel names an edge or ring segment this panel's outline does not have.
+    #[error("panel bevel uses unsupported {on}")]
+    UnsupportedBevel {
+        /// The rejected outline edge.
+        on: EdgeRef,
+    },
+    /// A bevel names a curved segment, whose end face is not a plane.
+    #[error("panel bevel on {on} is refused: the segment is curved")]
+    CurvedBevel {
+        /// The rejected outline edge.
+        on: EdgeRef,
+    },
+    /// A beveled edge also carries an edge band, which would follow the nominal edge.
+    #[error("panel bevel on {on} is refused while the edge is banded")]
+    BandedBevel {
+        /// The outline edge that carries both records.
+        on: EdgeRef,
+    },
 }
 
 /// Serialized form of [`Panel`]: the current layout, and nothing else.
@@ -763,6 +929,8 @@ pub(crate) struct PanelWire {
     ring_banding: Vec<RingBanding>,
     #[serde(default)]
     band_order: Vec<SegmentSource>,
+    #[serde(default)]
+    bevels: Vec<EdgeBevel>,
     #[serde(default)]
     properties: Properties,
 }
@@ -802,6 +970,8 @@ impl TryFrom<PanelWire> for Panel {
         panel.ring_banding = wire.ring_banding;
         panel.band_order =
             normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding, &panel.ring_banding);
+        panel.bevels = wire.bevels;
+        panel.validate_bevels()?;
         panel.properties = wire.properties;
         Ok(panel)
     }
@@ -1240,6 +1410,53 @@ mod tests {
         let decoded: Panel = serde_json::from_value(value).expect("older panel without machining");
         assert_eq!(decoded, panel);
         assert!(decoded.machining().is_empty());
+    }
+
+    #[test]
+    fn a_stored_bevel_must_name_one_straight_unbanded_edge() {
+        let panel = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let value = serde_json::to_value(&panel).expect("serialize panel");
+        let bevel = |edge: u32| serde_json::json!([{"source": {"kind": "rect", "edge": edge}, "angle": 45_000}]);
+
+        // One record per source.
+        let mut duplicate = value.clone();
+        duplicate["bevels"] = serde_json::json!([
+            {"source": {"kind": "rect", "edge": 1}, "angle": 45_000},
+            {"source": {"kind": "rect", "edge": 1}, "angle": 30_000}
+        ]);
+        let error = serde_json::from_value::<Panel>(duplicate).expect_err("one bevel per edge");
+        assert!(error.to_string().contains("duplicate bevel on edge 1"), "{error}");
+
+        // The source must be an edge of the rectangular outline.
+        let mut unsupported = value.clone();
+        unsupported["bevels"] = bevel(5);
+        let error = serde_json::from_value::<Panel>(unsupported).expect_err("edge 5 is not a rectangle edge");
+        assert!(error.to_string().contains("unsupported edge 5"), "{error}");
+
+        // A rectangular panel has no ring segment to name.
+        let mut foreign = value.clone();
+        foreign["bevels"] = serde_json::json!([{"source": {"kind": "ring", "segment": 1}, "angle": 45_000}]);
+        let error = serde_json::from_value::<Panel>(foreign).expect_err("a rectangle has no ring segment");
+        assert!(error.to_string().contains("unsupported ring segment 1"), "{error}");
+
+        // A bevel and a band cannot share an edge.
+        let mut banded = value.clone();
+        banded["bevels"] = bevel(1);
+        banded["edge_banding"] = serde_json::json!([{
+            "edge": 1,
+            "material": 1,
+            "included_in_size": false,
+            "last_known_thickness": 2_000,
+            "last_known_width": 22_000,
+        }]);
+        let error = serde_json::from_value::<Panel>(banded).expect_err("a banded edge has no square face left");
+        assert!(error.to_string().contains("while the edge is banded"), "{error}");
+
+        // An angle past the cap is refused by the record's own constructor.
+        let mut steep = value;
+        steep["bevels"] = serde_json::json!([{"source": {"kind": "rect", "edge": 1}, "angle": 89_000}]);
+        let error = serde_json::from_value::<Panel>(steep).expect_err("89 degrees is the cap");
+        assert!(error.to_string().contains("too steep"), "{error}");
     }
 
     #[test]
