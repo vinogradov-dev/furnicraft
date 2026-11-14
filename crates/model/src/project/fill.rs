@@ -1227,3 +1227,48 @@ mod tests {
         assert_eq!(free_axis(Fill::HeightAndDepth), 0);
     }
 }
+
+#[cfg(test)]
+mod turned {
+    #![allow(clippy::expect_used)]
+    use super::*;
+    use crate::fixtures::*;
+
+    #[test]
+    fn a_splayed_case_turned_in_two_axes_offers_every_build() {
+        let root = Container::new(Id::new(1).expect("an id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("a project");
+        let envelope = Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("an envelope");
+        let product = project
+            .add_product(project.root().id(), "Piece", ClassCode::GENERAL_PRODUCT, envelope, Placement::IDENTITY)
+            .expect("a product");
+        let slant = 100.0 / 560.0_f64.hypot(100.0);
+        let drop = 560.0 / 560.0_f64.hypot(100.0);
+        for (through, normal) in [((100.0, 0.0), (drop, -slant)), ((500.0, 0.0), (-drop, -slant))] {
+            let direction = (-normal.1, normal.0);
+            let start_y = 280.0 - 600.0 * direction.1;
+            let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
+            let rotation = DQuat::from_rotation_y(10.0_f64.to_radians())
+                * DQuat::from_rotation_z(normal.1.atan2(normal.0))
+                * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+            let translation = DVec3::new(start_x, start_y, 720.0) - DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+            let placement = Placement::new(translation, rotation).expect("a post placement");
+            let size = PanelNominalSize::new(millimetres(720), millimetres(1200)).expect("a post size");
+            project.add_panel(product, "Post", size, None, millimetres(18), placement).expect("the post lands");
+        }
+        let top = PanelNominalSize::new(millimetres(600), millimetres(400)).expect("a short top");
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(0), millimetres(0), millimetres(702))
+            .expect("a top placement");
+        project.add_panel(product, "Top", top, None, millimetres(18), placement).expect("add a top");
+        let point = DVec3::new(300.0, 280.0, 360.0);
+        for fill in [Fill::WidthAndDepth, Fill::HeightAndDepth] {
+            for mode in [FillMode::Fit, FillMode::Shape] {
+                let planned = project
+                    .fill_plan(product, point, fill, mode, millimetres(18), None)
+                    .unwrap_or_else(|refusal| panic!("{fill:?}/{mode:?} refused: {refusal:?}"));
+                assert!(planned.corners.len() >= 3, "{fill:?}/{mode:?} has a footprint");
+            }
+        }
+    }
+}
