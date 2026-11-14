@@ -549,6 +549,7 @@ mod tests {
         Chrome {
             panels: PanelRects::default(),
             ribbon: Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), 0.0)),
+            list: None,
         }
     }
 
@@ -562,7 +563,11 @@ mod tests {
         let ribbon = Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), ribbon_height));
         let width = |state: PanelState| if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
         let top = viewport.top() + panel_top(ribbon_height);
-        Chrome { panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))), ribbon }
+        Chrome {
+            panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))),
+            ribbon,
+            list: None,
+        }
     }
 
     #[test]

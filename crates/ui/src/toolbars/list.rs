@@ -19,6 +19,12 @@
 //! state), and running a row closes it here. Pinning deliberately keeps it open: the accent moves to
 //! the new row, which is the whole feedback the pin has.
 //!
+//! The popup owns the pointer across its whole rectangle while it is drawn — the header, the rows,
+//! the key column and the pin — and reports that rectangle as [`Shown::rect`] so the shell can treat
+//! it as chrome over the scene. The cursor is claimed here, once for the whole popup, instead of by
+//! each row: a row's own response covers only the part of it a control was drawn over, so the key
+//! and the pin column fell through to whatever the viewport wrote for the frame (X37).
+//!
 //! The open tool and the highlighted row are view state in the ribbon, never document data: opening
 //! the list writes nothing, and picking a row only reports what the editor should run.
 
@@ -110,6 +116,19 @@ pub enum ListChoice {
     Pin(usize),
 }
 
+/// What one open list did on the frame it drew: the row it chose, and the rectangle it covered.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Shown {
+    /// The row the pointer or the keyboard chose, if any.
+    pub choice: Option<ListChoice>,
+    /// The rectangle the popup covered, while it is drawn.
+    ///
+    /// It is `None` on the frame the list is closed, and the shell keeps it only for the frame it
+    /// was measured on: the popup is a surface over the scene, so a press or a tool cursor inside
+    /// it belongs to the list and not to the viewport (X37).
+    pub rect: Option<egui::Rect>,
+}
+
 /// One drawn row: the method, the sentence it explains itself with, and what it would run.
 pub struct Row {
     /// The method the map declares.
@@ -177,11 +196,13 @@ pub fn show(
     anchor: &Response,
     pinned: usize,
     lang: Lang,
-) -> Option<ListChoice> {
-    let mut list = (*slot)?;
+) -> Shown {
+    let Some(mut list) = *slot else {
+        return Shown::default();
+    };
     let mut open = true;
     let mut chosen = None;
-    Popup::from_response(anchor)
+    let drawn = Popup::from_response(anchor)
         .id(egui::Id::unique(("ribbon.variants", tool.id)))
         .open_bool(&mut open)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
@@ -194,7 +215,21 @@ pub fn show(
         });
     let still_open = open && !matches!(chosen, Some(ListChoice::Run(_)));
     *slot = still_open.then_some(list);
-    chosen
+    let rect = if still_open { drawn.map(|drawn| drawn.response.rect) } else { None };
+    claim_cursor(ui, rect);
+    Shown { choice: chosen, rect }
+}
+
+/// Claims the frame's cursor for the whole popup while the pointer is inside it.
+///
+/// One rectangle read from the popup's own response, not one per row: the header, the name, the key
+/// and the pin are one surface, and a pointer that changes shape as it crosses a column of it reads
+/// as a control that only half exists (X37). The list is chrome, so its cursor is the arrow.
+fn claim_cursor(ui: &Ui, rect: Option<egui::Rect>) {
+    let inside = rect.is_some_and(|rect| ui.ctx().pointer_hover_pos().is_some_and(|pointer| rect.contains(pointer)));
+    if inside {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+    }
 }
 
 /// The frame the list draws: the darkest chrome fill, one hairline and the corner of a floating card.

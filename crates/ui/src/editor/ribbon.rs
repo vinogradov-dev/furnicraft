@@ -64,8 +64,10 @@ impl Editor {
             draft,
         };
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, context, &mut actions);
-        self.apply_ribbon_actions(session, actions, crate::language(ui.ctx()))
+        let list_rect = toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        let mut outcome = self.apply_ribbon_actions(session, actions, crate::language(ui.ctx()))?;
+        outcome.list_rect = list_rect;
+        Ok(outcome)
     }
 
     /// Runs the actions one drawn ribbon asked for and reports what the shell must still do.

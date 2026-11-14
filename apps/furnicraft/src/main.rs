@@ -106,6 +106,11 @@ pub(crate) struct Shell {
     /// height and the framing and the orientation widget stay below it (U51, ADR 0080). `None` until
     /// the first real frame, when the deterministic [`furnicraft_ui::toolbars::height`] stands in.
     pub(crate) ribbon_rect: Option<egui::Rect>,
+    /// The rectangle the open method list covered on the last drawn frame.
+    ///
+    /// The list hangs under the ribbon band and over the scene, so it is chrome the frame must keep
+    /// the pointer out of: a tool cursor or a pick inside it would belong to the viewport (X37).
+    pub(crate) list_rect: Option<egui::Rect>,
     /// Whether a view border owns the primary button until it is released.
     pub(crate) divider_dragging: bool,
     /// Whether the frame being drawn rebuilt its scene, so the status bar can say «Перестроение…».
@@ -127,6 +132,7 @@ impl Default for Shell {
             mode: TransformMode::Move,
             pointer_position: None,
             ribbon_rect: None,
+            list_rect: None,
             divider_dragging: false,
             rebuilding: false,
             open_settings: false,
@@ -844,7 +850,7 @@ impl FurniCraftApp {
             panels,
             (width("scene_tree", panels.scene), width("panel_card", panels.inspector)),
         );
-        let chrome = Chrome { panels: rects, ribbon: band };
+        let chrome = Chrome { panels: rects, ribbon: band, list: self.shell.list_rect };
         self.workspace(ui, &chrome);
         if let Some(rect) = rects.left {
             self.scene_tree(&ctx, rect);

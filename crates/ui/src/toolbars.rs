@@ -309,6 +309,11 @@ pub struct RibbonOutcome {
     /// The card belongs to the window, like Settings and the File dialogs, so the ribbon reports
     /// the request and the shell draws it (ADR 0100).
     pub open_product_card: bool,
+    /// The rectangle the open method list covered, when one was drawn this frame.
+    ///
+    /// The list is a surface over the scene, so the shell treats this rectangle as chrome: a press
+    /// or a tool cursor inside it belongs to the list, not to the viewport (X37).
+    pub list_rect: Option<egui::Rect>,
 }
 
 /// What the ribbon reads from the scene, the pointer and the view camera while it draws.
@@ -344,8 +349,17 @@ pub struct RibbonContext {
 /// Clicking the active tab, or double-clicking any tab label, toggles the body, so a collapsed ribbon
 /// keeps only its tab row. The armed tool draws pressed and a tool whose action needs a draft or a
 /// viewport that owns its projection is drawn disabled; the hint says what is missing.
-pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
+///
+/// Returns the rectangle of the open method list, when a cell drew one: the popup hangs under the
+/// band and over the scene, so the shell needs it for the frame it is on (X37).
+pub fn show(
+    ui: &mut Ui,
+    state: &mut Toolbars,
+    context: RibbonContext,
+    actions: &mut Vec<ToolAction>,
+) -> Option<egui::Rect> {
     let lang = crate::language(ui.ctx());
+    let mut list_rect = None;
     ui.scope(|ui| {
         ui.set_width(ui.available_width());
         // The rows sit edge to edge: the drawn height is the sum of the metrics and nothing else,
@@ -356,10 +370,11 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: 
         tab_row(ui, state, lang);
         rule(ui);
         if state.is_open() {
-            ribbon_body(ui, state, context, actions, lang);
+            list_rect = ribbon_body(ui, state, context, actions, lang);
             rule(ui);
         }
     });
+    list_rect
 }
 
 /// The outer margin of the ribbon's overlay frame, in points (horizontal, vertical).
@@ -471,12 +486,19 @@ fn tab_button(ui: &mut Ui, tab: &'static TabSpec, selected: bool, height: f32, l
 /// its own caption if the caption is wider than its cells, so a one-tool group still names itself.
 /// The widest row of the map is ten cells, well inside the smallest window, so the body needs no
 /// scroll area.
-fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>, lang: Lang) {
+fn ribbon_body(
+    ui: &mut Ui,
+    state: &mut Toolbars,
+    context: RibbonContext,
+    actions: &mut Vec<ToolAction>,
+    lang: Lang,
+) -> Option<egui::Rect> {
     let tab = state.tab();
     if !tab.is_drawn() {
-        return;
+        return None;
     }
     let body_height = RIBBON_ROW_HEIGHT + RIBBON_CAPTION_HEIGHT;
+    let mut list_rect = None;
     ui.horizontal(|ui| {
         // Cells sit edge to edge inside a group: the whole cell is the button, and the only air
         // between two controls is the padding the cell already carries (ADR 0067).
@@ -486,9 +508,10 @@ fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, action
             if index > 0 {
                 crate::theme::divider_of_height(ui, body_height);
             }
-            show_group(ui, group, state, context, actions, lang);
+            list_rect = show_group(ui, group, state, context, actions, lang).or(list_rect);
         }
     });
+    list_rect
 }
 
 /// One group: its row of cells over the darker band that captions it.
@@ -499,18 +522,20 @@ fn show_group(
     context: RibbonContext,
     actions: &mut Vec<ToolAction>,
     lang: Lang,
-) {
+) -> Option<egui::Rect> {
+    let mut list_rect = None;
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let row = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.set_height(RIBBON_ROW_HEIGHT);
             for tool in group.live_tools() {
-                show_tool(ui, tool, state, context, actions, lang);
+                list_rect = show_tool(ui, tool, state, context, actions, lang).or(list_rect);
             }
         });
         caption_band(ui, row.response.rect.width(), group.label.text(lang));
     });
+    list_rect
 }
 
 /// The caption band under one group: the quiet strip with the group's name in capitals.
@@ -561,13 +586,9 @@ fn show_tool(
     context: RibbonContext,
     actions: &mut Vec<ToolAction>,
     lang: Lang,
-) {
-    let Some(kind) = tool.primary() else {
-        return;
-    };
-    let Some(icon) = tool.icon else {
-        return;
-    };
+) -> Option<egui::Rect> {
+    let kind = tool.primary()?;
+    let icon = tool.icon?;
     if !tool.has_list() {
         // The projection button draws the mode the view is *in*, so the glyph flips with the camera
         // while the hint names the switch.
@@ -579,16 +600,14 @@ fn show_tool(
         {
             actions.push(action);
         }
-        return;
+        return None;
     }
     let rows = method_rows(tool, state, context, lang);
     let pinned = state.pinned_index(tool);
     // The armed method is what the cell shows: picking a mode from the list must change the face
     // and the pressed state, not just the ghost, or the choice looks like it did not take (ADR 0110).
     let shown = rows.iter().position(|row| row.armed).unwrap_or(pinned);
-    let Some(face) = main_face(tool, &rows, shown) else {
-        return;
-    };
+    let face = main_face(tool, &rows, shown)?;
     let caret_hint = Message::ToolMethods.text(lang);
     let cell =
         icons::ribbon_split_cell(ui, RIBBON_CELL_WIDTH, face.icon, &face.hint, caret_hint, face.enabled, face.armed);
@@ -603,10 +622,12 @@ fn show_tool(
     if cell.caret.clicked() {
         state.toggle_list(tool);
     }
-    if state.list_open_for(tool) {
-        let choice = list::show(ui, &mut state.list, tool, &rows, &cell.main, pinned, lang);
-        apply_choice(state, tool, &rows, choice, actions);
+    if !state.list_open_for(tool) {
+        return None;
     }
+    let shown = list::show(ui, &mut state.list, tool, &rows, &cell.main, pinned, lang);
+    apply_choice(state, tool, &rows, shown.choice, actions);
+    shown.rect
 }
 
 /// What the main face of a split cell draws and runs.

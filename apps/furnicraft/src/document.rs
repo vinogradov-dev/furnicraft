@@ -2486,6 +2486,10 @@ impl Document {
         if rect.is_some() {
             shell.ribbon_rect = rect;
         }
+        // An open method list hangs under the band and over the scene: the shell keeps its rectangle
+        // so the viewport reads a press or the pointer inside it as chrome, and the list's own cursor
+        // is the one the frame shows (X37).
+        shell.list_rect = outcome.as_ref().and_then(|outcome| outcome.list_rect);
         let mut open_product_card = false;
         if let Some(outcome) = outcome {
             open_product_card = outcome.open_product_card;
@@ -3039,6 +3043,7 @@ mod tests {
                 view.min,
                 egui::vec2(view.width(), furnicraft_ui::toolbars::height(true)),
             ),
+            list: None,
         };
         let mut cluster = ViewCluster::default();
         assert!(cluster.widget_visible(), "the corner widget is on until the switch turns it off");

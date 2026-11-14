@@ -43,6 +43,14 @@ struct Harness {
     path: std::path::PathBuf,
     /// The text the last frame drew, so a test reads what the user would see.
     drawn: Vec<String>,
+    /// The cursor the last frame asked the window for: the one place a cursor is decided (X37).
+    cursor: egui::CursorIcon,
+    /// The named controls of the last frame with the rectangle each one took.
+    ///
+    /// The ribbon's faces are not on a pitch a test can count — a split cell adds its caret column
+    /// and a group its divider — so a test is told where the frame put a control instead of
+    /// recomputing the strip's metrics.
+    faces: Vec<(String, egui::Rect)>,
     /// The scene rectangle the frame before the last one gave the split views, so [`Harness::settle`]
     /// can tell a settled frame from one whose layout is still moving.
     last_scene: Option<egui::Rect>,
@@ -57,9 +65,20 @@ impl Harness {
     fn with_session(name: &str, session: furnicraft_engine::Session) -> Self {
         let path = furnicraft_testkit::scratch_dir(name).join("settings.json");
         let ctx = egui::Context::default();
+        // The accessible tree names every ribbon face with the rectangle it took, which is how a test
+        // aims at a caret without repeating the strip's layout.
+        ctx.enable_accesskit();
         let app = FurniCraftApp::headless(&ctx, path.clone(), Settings::default(), session)
             .expect("the application builds with no device, no adapter and no window");
-        Self { ctx, app, path, drawn: Vec::new(), last_scene: None }
+        Self {
+            ctx,
+            app,
+            path,
+            drawn: Vec::new(),
+            cursor: egui::CursorIcon::Default,
+            faces: Vec::new(),
+            last_scene: None,
+        }
     }
 
     /// Runs one real frame with `events` and returns the chrome it gave the window.
@@ -73,6 +92,8 @@ impl Harness {
                 chrome = Some(self.app.frame(ui));
             });
         self.drawn = crate::test_support::drawn_text(&output.shapes);
+        self.cursor = output.platform_output.cursor_icon;
+        self.faces = accessible_faces(&output);
         self.last_scene = self.app.tabs.active().scene_rect();
         output.textures_delta.clear();
         chrome.expect("the frame drew the interface")
@@ -175,6 +196,35 @@ impl Harness {
     fn drew(&self, text: &str) -> bool {
         self.drawn.iter().any(|line| line.contains(text))
     }
+
+    /// The middle of the control the last frame published as `label`.
+    ///
+    /// A test presses the middle of a face, so the point is what it asks for and the rectangle stays
+    /// the frame's own business.
+    fn face(&self, label: &str) -> Option<egui::Pos2> {
+        self.faces.iter().find_map(|(name, rect)| (name == label).then_some(rect.center()))
+    }
+}
+
+/// The named controls of one frame with the rectangle each one took.
+///
+/// A control's name is its accessible label, which is the hint a ribbon face is drawn with, so the
+/// frame itself says where it put the control a test wants to press.
+fn accessible_faces(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else { return Vec::new() };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let label = node.label()?;
+            let bounds = node.bounds()?;
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+            );
+            Some((label.to_owned(), rect))
+        })
+        .collect()
 }
 
 /// The aspect ratio the renderer derives from a rectangle: each view's own, not the target's.
@@ -308,6 +358,49 @@ fn a_press_on_a_panel_is_chrome_and_a_press_beside_it_reaches_the_scene() {
     harness.click(harness.scene().center(), egui::PointerButton::Primary);
     let after = harness.selected();
     assert!(!after.is_empty() && after != selected, "a click in the middle of the scene selects the model there");
+}
+
+#[test]
+fn an_open_method_list_owns_the_cursor_across_its_whole_rectangle() {
+    // The list hangs under the ribbon band and over the scene, so an armed tool used to take the
+    // pointer back across the key label and the reserved pin column — the parts of a row no control
+    // of its own was drawn over — while the name kept the list's cursor (X37).
+    let mut harness = Harness::new("frame-list-cursor");
+    harness.settle();
+    // The circle is armed by its key, so the viewport has a tool cursor to lose.
+    harness.press(egui::Key::C, egui::Modifiers::NONE);
+    assert_eq!(harness.cursor, egui::CursorIcon::Crosshair, "an armed tool owns the scene's pointer");
+
+    // The caret face publishes its name, so the frame says where it put the control to press.
+    let caret = harness.face(Message::ToolMethods.text(Lang::En)).expect("the split cell publishes its caret face");
+    harness.click(caret, egui::PointerButton::Primary);
+    let chrome = harness.settle();
+    let list = chrome.list.expect("an open list is chrome over the scene");
+    assert!(list.width() >= furnicraft_ui::toolbars::list::WIDTH, "the popup is drawn at the approved width");
+
+    // Four points across the open list: the header, a row's name, its key and its pin. Every one of
+    // them is the list, so every one of them shows the list's cursor.
+    let row =
+        list.top() + furnicraft_ui::toolbars::list::HEADER_HEIGHT + furnicraft_ui::toolbars::list::ROW_HEIGHT / 2.0;
+    let probes = [
+        ("the header", egui::pos2(list.center().x, list.top() + 8.0)),
+        ("the name", egui::pos2(list.left() + list.width() * 0.35, row)),
+        ("the key", egui::pos2(list.left() + list.width() * 0.80, row)),
+        ("the pin", egui::pos2(list.left() + list.width() * 0.93, row)),
+    ];
+    for (column, point) in probes {
+        harness.hover(point);
+        assert_eq!(harness.cursor, egui::CursorIcon::Default, "the list owns the pointer over {column}");
+        assert!(chrome.covers(point), "{column} is inside the list's rectangle");
+    }
+
+    // The caret closes the list again, and the frame after it gives the pointer back to the tool.
+    harness.click(caret, egui::PointerButton::Primary);
+    let chrome = harness.settle();
+    assert!(chrome.list.is_none(), "the question the caret asked is answered and the list is gone");
+    assert!(harness.face(Message::ToolMethods.text(Lang::En)).is_some(), "the caret is still there");
+    harness.hover(harness.scene().center());
+    assert_eq!(harness.cursor, egui::CursorIcon::Crosshair, "the armed tool gets the scene's pointer back");
 }
 
 #[test]
