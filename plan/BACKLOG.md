@@ -41,6 +41,76 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 ## Bugs
+- `[ ]` **X36** a split ribbon cell squeezes its main face to 24 pt, so the glyph reads as cut off
+  Why: Observation: a cell is `RIBBON_CELL_WIDTH` (34) x `RIBBON_ROW_HEIGHT` (30), and a tool
+   with methods splits it into a 24 pt main face and a 10 pt caret (`RIBBON_CARET_WIDTH`), so a
+   22 pt glyph sits 1 pt from each edge and the face reads as cut off beside every plain cell.
+   Expected: the face of a tool with methods is a full cell, exactly like a tool without one,
+   and the caret is added to its right. Suspected cause: `ribbon_split_cell` is handed
+   `RIBBON_CELL_WIDTH` and subtracts the caret from it, and `icons.rs`'s own anatomy test
+   asserts the 24 pt face.
+  Shape: The split cell takes `RIBBON_CELL_WIDTH + RIBBON_CARET_WIDTH`, keeps the main face at
+   the full cell and puts the caret outside it, so one row of cells keeps one glyph size and
+   one rhythm; the anatomy test, the width assertion and the ribbon's group columns follow. The
+   caret stays 10 pt, so its target is unchanged.
+  Done: A split cell's main face measures `RIBBON_CELL_WIDTH` and its caret
+   `RIBBON_CARET_WIDTH`, the two touch, the anatomy tests assert the new sizes, a row of mixed
+   plain and split cells reads as one rhythm in an offscreen shot under `target/ui-shots`, and
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs`
+- `[ ]` **X37** an open method list owns the pointer only across part of its own rectangle
+  Why: Observation: with a drawing tool armed, the pointer over an open method list keeps the
+   list's cursor across a row's glyph and name, but the tool cursor comes back over the
+   right-hand part of the row, where the key label and the pin sit, although the whole 298 pt
+   popup is the list. Expected: the popup owns the pointer across its whole width and height —
+   header, rows, key column and pin — and the tool cursor belongs to the viewport, never to a
+   surface drawn over it. Suspected cause: nothing claims the cursor for the popup's own
+   rectangle, so the cursor over it is decided by whichever surface wrote last, and the key
+   label and the reserved pin column fall back to what the viewport wrote for the frame.
+  Shape: One place decides the cursor for the frame: the list claims its own cursor while the
+   pointer is inside the popup rectangle (one rectangle, read from the popup's response, not
+   per row), and the viewport reads the chrome before it writes a tool cursor. A headless test
+   drives `RawInput` with the pointer at four positions across the open list — the header, the
+   name, the key and the pin — asserts one cursor for all four, and asserts the armed tool's
+   cursor returns on the frame the list closes.
+  Done: The whole open list shows one cursor and the frame after it closes shows the tool's;
+   the test fails before the change and passes after; `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/list.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **X38** inside an open product a click selects the whole product instead of the part under the pointer
+  Why: Observation: with a product opened by a double click, every click in the viewport
+   selects the product, while the tree selects and highlights the part under the pointer; an
+   open group already behaves correctly. Expected: an open level exposes its children to the
+   click, so a click lands on the part, a double click enters one level further and Escape
+   leaves. Suspected cause: the open product is `Session::active_product`, view state separate
+   from `Editor.open`, and `target::resolve_viewport_pick` reads only the open set, so the walk
+   up from the hit node stops at the product container.
+  Shape: The rule takes the open product too — one argument to `resolve_viewport_pick`, or the
+   editor folds it into the set it passes — so a closed product still picks as one object and
+   an open one exposes its parts. The rule keeps its shape: a document id in, a document id or
+   `None` out, no mutation.
+  Done: A unit test on `resolve_viewport_pick` with an open product returns the part and with a
+   closed one the product; a frame test opens the fixture product, clicks a panel and asserts
+   the selection and the status bar name the part; `plan/map.md`'s picking row stops claiming a
+   click inside a product picks the product; `cargo xtask ci` is green.
+  `files: crates/ui/src/target.rs, crates/ui/src/editor/selection.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **X39** the inspector's last row hides under the horizontal scroller, and the tree scrolls by a different route
+  Why: Observation: the right panel's content ends flush with the panel's rounded bottom edge
+   and the horizontal scrollbar the inspector needs crosses the last card, so the bottom reads
+   as cut off; the left tree uses its own vertical `ScrollArea` and its own margins, so the two
+   panels do not agree. Expected: both panels keep the same air at the bottom as at the sides,
+   the last row clears the scrollbar, and one helper draws both bodies. Suspected cause:
+   `scroll_body` bounds the body to the panel's inner width but reserves nothing at the bottom,
+   and `main.rs` gives the tree a plain `ScrollArea::vertical` instead of that helper.
+  Shape: `scroll_body` becomes the one scroller of both panels (the tree's private `ScrollArea`
+   goes), with shrinking off, the panel's side inset and a bottom inset of one step plus the
+   scrollbar's own height reserved, so the last row can always be scrolled clear of it.
+   `panel_rect` keeps its geometry; a golden pins the inner content rectangle.
+  Done: A headless test measures the inner content rectangle of both panels and asserts the
+   bottom inset is at least the side inset plus the scrollbar height; an offscreen shot of the
+   longest card and the deepest tree shows no clipped row in either theme; `cargo xtask ci` is
+   green.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs`
+
 ## Next
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
   Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
@@ -109,6 +179,219 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
+- `[ ]` **U83** the program's own guides get one ink and one stroke: the helper ink
+  why: The corner brackets of an open level (U89) and the viewport's own cursor (U88) are the
+   first things FurniCraft draws to help rather than to show the furniture, and the owner asked
+   for the colour and thickness rule before more helper geometry arrives. A guide whose colour
+   is a literal in a feature module is the defect `cargo xtask ui-rules` exists to stop (ADR
+   0063, 0089), and a guide that disappears into the light theme is worse than no guide.
+  Shape: `theme::helper()` returns the ink — a warm amber, mixed from the palette so it keeps
+   its contrast in both variants of all three presets — and `theme::HELPER_STROKE` the rest
+   width; a test pins the contrast against `surface`, `panel` and the viewport background
+   (`scene::SceneColors`) at 3:1 or better and asserts the ink is never the accent, the danger
+   colour or the selection colour. `scene::SceneColors` carries the same ink for a guide the
+   frame draws, resolved once per frame the way the shell resolves it today. The widths are one
+   rule: 1 pt for a full-viewport crosshair, 1.5 pt for a bracket at rest, 2 pt for the bracket
+   that marks the open level. ADR 0111 records the ink, the widths and the rule that a guide is
+   screen space and never document data.
+  Done: The ink and the widths exist in `theme.rs`, the contrast test passes in both variants
+   of all three presets, ADR 0111 is written and listed in `docs/decisions/README.md`, `cargo
+   xtask ui-rules` and `cargo xtask plan` are green, and `plan/map.md` names the ink's home.
+  `files: crates/ui/src/theme.rs, crates/scene/src/lib.rs, docs/decisions`
+- `[ ]` **U84** the method list is one flat list of names: the section captions go
+  Why: The owner asked for the captions to go: a «Build» or «Tangents» heading over one or two
+   rows is a second line to read, it makes a small menu look like a form, and the row's own
+   name already says how the figure is built. They exist only inside the ribbon's variant list
+   (U67, U74) and are the only place a method is grouped.
+  Shape: Delete `Method::section` and `VariantSpec::section` from `toolbars/spec.rs` and the
+   section inheritance in `ToolSpec::default_method`, the `CAPTION_HEIGHT` constant and the
+   caption drawing from `toolbars/list.rs`, and the three `Section*` messages from
+   `crates/text`. The rows keep the order the map declares, so the list is the header plus one
+   row per method; a test asserts the drawn order equals the declared order and that a list's
+   height is `HEADER_HEIGHT` plus rows times `ROW_HEIGHT`. `plan/map.md`'s ribbon row stops
+   naming captions.
+  Done: No caption is drawn for any tool; the circle's list is four rows of names; no
+   `Section*` message remains in `crates/text`; the list-height test passes; `cargo xtask ci`
+   is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/text/src/messages.rs`
+- `[ ]` **U85** the Delete key removes the whole selection behind one question
+  Why: Shift-click builds a multi-selection but nothing deletes it: the tree's row menu removes
+   one node at a time, so a keyboard user cannot remove what they selected, and looping
+   `node.delete` leaves one undo entry per node. The owner asked for the whole set at once,
+   with a confirmation when the key does it.
+  Shape: A new `node.delete.many` in `crates/engine/src/node_cmds.rs` takes `{ nodes: Vec<Id>
+   }`, is enabled when at least one node exists, skips a node whose ancestor is also in the
+   list, removes the rest and returns one changed outcome, so the session records one undo
+   entry; the registry and its tests gain it. `Del` is read in `shortcuts.rs` only with no text
+   field focused and no modal up, and dispatches it for `editor.selected_nodes()`: one node
+   deletes at once because undo covers it, two or more open the question host `file_menu.rs`
+   already owns (`ConfirmClose`) with the count and *Delete*/*Cancel*, Escape cancelling. A
+   locked node refuses the whole operation with the existing `locked_command_refusal` sentence.
+   ADR 0112 records when a destructive key asks and when undo is enough.
+  Done: Tests cover one node, three nodes where one contains another, a locked node and undo
+   restoring all of them in one step; a headless frame test presses Del over two selected nodes
+   and asserts one question with no document change until *Delete*; the label and the question
+   are message ids; ADR 0112 is written; `cargo xtask ci` is green.
+  `files: crates/engine/src/node_cmds.rs, crates/engine/src/commands.rs, apps/furnicraft/src/shortcuts.rs, apps/furnicraft/src/file_menu.rs`
+- `[ ]` **U86** the transform gizmos are smaller and their size is a setting
+  Why: The translate handles are 84 pt (`gizmo_math::HANDLE_LENGTH`) and the rotate rings are 9
+   % of the camera distance (`rotate_gizmo::RING_RADIUS_FACTOR`), so on a small part the gizmo
+   is larger than the part and covers the face the person is judging and the distances the drag
+   measures. A hand that works at 4K and a hand at 1080p want different sizes, so the number
+   belongs in Settings › View rather than in a constant.
+  Shape: A `GizmoSettings { handle_points: u32, ring_percent: u32 }` section in
+   `crates/ui/src/settings.rs` with limits (`MIN`/`MAX_HANDLE_POINTS`,
+   `MIN`/`MAX_RING_PERCENT`), a default well below today's 84 pt and 9 %, and a scrub field for
+   each, clamped on read and repaired like `roll_step_degrees`. `paint_axis_handles` and
+   `hit_axis` take the handle length from the caller so one value serves drawing and picking,
+   `rotate_gizmo` takes its radius factor the same way, and the exact-distance fields follow
+   the anchor. The shell hands the resolved settings to every tab the way it hands
+   `ViewportSettings`; nothing enters the document.
+  Done: Both gizmos are visibly smaller at the default and scale with the two fields;
+   `settings.json` round-trips, clamps 8 and 400, and repairs a broken value instead of costing
+   the file; a headless test drags an axis at the minimum and at the maximum handle length and
+   the hit radius follows; no document revision moves when the size changes; an offscreen shot
+   shows the small and the large gizmo; `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/rotate_gizmo.rs, crates/ui/src/settings.rs`
+- `[ ]` **U87** the transform mode can be off, and Select is the state a window opens in
+  Why: One of the two gizmos is always up, so a person who only wants to look, pick and read
+   works with handles they did not ask for, and a stray press on an axis moves the cabinet. The
+   owner asked for the third state and for Select as the default, which is what a professional
+   editor opens in.
+  Shape: `TransformMode` gains `Select`, the shell defaults to it, and the status bar draws the
+   three as one segmented control. `document.rs` draws and updates a gizmo only in `Move` and
+   `Rotate`; in `Select` a click selects, shift adds, a double click still enters a level, and
+   a press where a handle would be does nothing. The ribbon's two cells stay pressed only while
+   the matching mode is on. The mode stays view state, per run, with no undo entry and no
+   `.fcs` field. A default a user meets on launch is an owner-visible break, so ADR 0113
+   records it.
+  Done: A fresh window draws no handles and a click selects; `Move` and `Rotate` each draw
+   their own gizmo and nothing else; a headless frame test asserts no handle consumes the click
+   in `Select`; the status bar control changes the mode; ADR 0113 is written; `cargo xtask ci`
+   is green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/status_bar.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U88** the viewport draws its own work cursor, sized in settings, with an optional full crosshair
+  Why: The OS arrow hides the point a click lands on and reads as a pointer to buttons rather
+   than to geometry; a small square with a centre dot says this is the point, and a full
+   crosshair lets a person line up two boards across a view. The owner asked for the square, a
+   size that is a setting with limits, and the crosshair as an option. A custom bitmap cursor
+   is not available through eframe 0.37 (`egui::CustomCursorImage` is web-only in the native
+   backend), so the shell draws the cursor itself.
+  Shape: A `PointerSettings { cursor_size: u32, crosshair: bool }` section in
+   `crates/ui/src/settings.rs` (limits 6..=32 pt) with a scrub field and a switch in Settings ›
+   View. While the pointer is over the active scene the shell sets `CursorIcon::None` and
+   paints, on `Order::Middle` over the image and under the chrome, a square of `cursor_size`
+   points centred on the pointer with a 1 pt outline and a 2 pt centre dot in the helper ink
+   (U83), plus, when `crosshair` is on, one 1 pt hairline across the whole viewport width and
+   height. A gesture that owns its own cursor (grab, resize, divider, scrub) keeps the OS icon
+   and the square is not painted; the paint is chrome, so it takes no click, and it never
+   enters the document.
+  Done: Headless tests assert the OS cursor is `None` exactly while the pointer is over the
+   scene and `Default` over a panel, that the square is centred on the pointer at the minimum
+   and the maximum size, and that the crosshair spans the viewport; settings round-trip clamps
+   2 to 6 and 64 to 32; an offscreen shot in both themes shows the square and the crosshair
+   (the eye check this task names); `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/document.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **U89** an open group or product draws its corner brackets, so the open level reads in the viewport
+  Why: An open container and a closed one look identical over the scene: only the tree says
+   which level is open, and once a click inside an open frame selects a part (X38) that
+   difference decides what the next click does. The owner asked for small brackets at the
+   corners — an orientation cue and a statement that the level is open — not a wireframe, which
+   would fight the form edges the renderer already draws.
+  Shape: `scene_build` already computes a `SubtreeBounds` per container in
+   `Evaluation::collect`; the shell collects the bounds of `editor.open` plus
+   `session.active_product()`, projects the eight corners with the view camera and paints, per
+   corner, three short arms along the box's own edges, each arm a fraction (about a fifth,
+   clamped to 6..=18 pt) of the shortest projected edge, in `theme::helper()` at the bracket
+   width (U83). The paint is screen space on `Order::Middle` with the viewport's clip rect,
+   after the image and before the gizmos, so no render pass changes. A closed container, a
+   hidden one and a product that is not open draw nothing; the brackets are view state and no
+   revision moves.
+  Done: Headless geometry tests on a fixed camera pin the eight corner points and the arm
+   length at two zoom levels; a frame test opens a group and counts exactly eight brackets,
+   closes it and counts none, and the same for an open product; the ink is `theme::helper()`;
+   `plan/map.md` gains the row; `cargo xtask ci` is green.
+  `files: apps/furnicraft/src/scene_build.rs, apps/furnicraft/src/scene_gizmo.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U90** the Furniture tab loses the loose Panel cell and offers a panel by contour instead
+  Why: `furniture.panels.panel` creates a panel from a fixed size in a card, outside any
+   product — the pre-frame way of making a board; the product's post and shelf cells make a
+   board where a niche has measured one, and the approved map already holds
+   `furniture.panels.contour` («Panel by contour») as planned. The owner asked for the old cell
+   and its path to go rather than stay as a second way to do the same thing, and the contour
+   cell is what fills the gap.
+  Shape: Delete the cell, `ToolKind::Panel`, `ToolAction::CreatePanel`, `Editor::create_panel`
+   and the ribbon fields only it read; `panel.create` stays, because fill, the palette and the
+   contour cell use it. Promote `furniture.panels.contour` to a live cell that arms a ring
+   drawn in the work plane and dispatches `panel.contour.create` when the draft closes, reusing
+   the drawing draft and the envelope the panel card already has; if the armed drawing cannot
+   land in the same change, the task keeps the cell planned and says so in `plan/notes/U90.md`
+   instead of shipping a second dead cell. The live-cell test, the palette entry and
+   `plan/map.md` follow. Removing an affordance is a break the owner approved, recorded in ADR
+   0114.
+  Done: The Furniture tab draws *Product frame*, *Post*, *Shelf* and *Panel by contour*; no
+   ribbon path reaches `ToolKind::Panel`; no test or spec mentions the removed id; a frame test
+   draws a ring with the contour cell into an open product and finds one panel whose outline is
+   that ring; ADR 0114 is written; `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/ui/src/editor/creation.rs, crates/ui/src/toolbars/ready.rs`
+- `[ ]` **U91** the snap toggle leaves View › Display for a group of its own captioned Snaps
+  Why: The grid-snap toggle sits under View › Display among style, contours, shadows and
+   section switches, so the one control that changes how a click behaves is filed with the ones
+   that change how the scene looks. The owner asked for the caption «Привязки»; a group of its
+   own is the smallest change that says where a snap lives, and it gives the endpoint, axis and
+   object snaps a home.
+  Shape: The map gains a `view.snaps` group (label `GroupSnaps`, «Привязки») holding the grid
+   snap as `view.snaps.grid` with its `G` key and hint unchanged; `view.display` keeps its
+   style, contour, shadow and section tools. The message table gains `GroupSnaps` in both
+   languages, the ids stay namespaced by their group, and the spec's uniqueness and live-group
+   tests cover the new row. No new dependency and no document change.
+  Done: The View tab shows a group captioned «Привязки» with the grid-snap cell and a Display
+   group without it; every id is unique and namespaced; the `G` key still toggles the snap;
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/spec.rs, crates/text/src/messages.rs`
+- `[ ]` **U92** a right click opens the actions of the node under the pointer, from one list the tree and the viewport share
+  Why: The tree row menu is the only context menu in the program: a right click in the viewport
+   draws nothing, so the actions a selected object has are two or three clicks away in the
+   tree, and the tree's own list is built inside an 850-line file. The owner asked for context
+   menus that carry the actions of the object under the pointer.
+  Shape: One module builds the action list for a node kind — a panel, an object, a product
+   container, a group, a camera or a light, the root and empty space — from the command
+   registry and the editor's flags, each entry a command id, its label message, its enabled
+   check and the reason it cannot run. The row menu and a new popup in the viewport draw that
+   list, so an entry cannot exist in one and not the other; the popup is anchored at the
+   pointer, closes on Escape and on an outside click, and is declared to `Chrome::covers`, so a
+   press on it is chrome and never a pick. The viewport reads a right *click* (press and
+   release within a few points) and leaves the right *drag* to the camera pan it already owns.
+   The new module is one row of `HOST_OWNERS` in `xtask/src/ui_rules.rs`. ADR 0115 records the
+   click-versus-drag split and the one-list rule.
+  Done: Right-clicking a panel, a group, a camera and empty space each opens the list that
+   object owns, with the same entries the tree shows for it; right-dragging still pans and
+   opens nothing; a headless frame test right-clicks a panel and asserts the menu's rectangle
+   and its first entry, and that the press changed no document revision; `plan/map.md` and the
+   ui-design skill's `references/surfaces.md` gain the surface; `cargo xtask ci` is green.
+  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs, apps/furnicraft/src/document.rs`
+- `[ ]` **U93** the object card is reviewed against the rubric and redesigned as one reading order
+  Why: The card a person reads most is 1780 lines and up to seven collapsible sections stacked
+   under two other cards, so the same fields appear in two places, the first screen is mostly
+   headers, and a mesh object is offered contour, figure, primitive and mesh sections of which
+   at most two can apply. The owner asked for the card to be studied, the excess removed and
+   the design improved; this is the one task of the pass that starts from a measurement rather
+   than from a bug.
+  shape: First the audit the ui-design skill orders: a brief in five lines, the inventory of
+   every section and field with the node kinds that can show it, and three options with their
+   cost in code and in learned conventions. Then the chosen shape — most likely one summary
+   band (kind, size, material, one warning chip), only the fields the selected node can use,
+   the modes (mesh edit, contour edit) as one row of actions rather than four collapsible
+   sections, and a fold state remembered per node kind. Every number stays the shared scrub
+   field, every mutation stays a command, nothing new enters the document; a removed section or
+   a changed reading order is a break the owner approves and ADR 0116 records. The measurement
+   and the rejected options go to `plan/notes/U93.md`.
+  done: The audit and the options are in `plan/notes/U93.md`; the card draws no section that
+   cannot apply to the selected node and no field twice on one screen; a headless test opens a
+   panel, an object and a product frame and asserts the sections drawn for each; an offscreen
+   shot of the three cards in both themes is looked at; ADR 0116 is written when a break ships;
+   `cargo xtask ci` is green.
+  `files: crates/ui/src/object_card.rs, crates/ui/src/editor/cards.rs, crates/ui/src/theme.rs`
+
 ## Done
 
 - `[x]` **N16** a changed bevel angle rebuilds the panel body
