@@ -111,6 +111,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/catalog.rs`
 ## Done
 
+- `[x]` **N15** a shaped fill starts its ring at the panel's zero corner
+  Why: The niche returns the section in its own angular order, so a shaped panel's first corner
+   was not its zero corner; on a board turned about its length axis it sat at the far end and
+   read as a second half-turn.
+  Done: The ring and its bevels rotate together until the zero corner leads; a test on a turned
+   shape asserts vertex 1 is the panel's zero.
+  `files: crates/model/src/project/fill.rs` — `93ce0ce`
+
 - `[x]` **N13** the fill cell has one panel kind and a visible build method
   Why: The owner reports that the empty-space tool's menu reads like a choice between two
    panels: the Shape row has no icon and, after picking it, the cell keeps showing the pinned
