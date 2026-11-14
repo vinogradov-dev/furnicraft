@@ -11,11 +11,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod banding;
+mod classify;
 mod contour;
 mod geometry;
 mod machining;
 
 pub use banding::{BandingSpec, CornerBanding, EdgeBanding, RingBanding};
+pub use classify::{RING_TOLERANCE_MM, classify_outline};
 pub use contour::{BakedOutline, ContourPath, PanelContourError, SegmentSource};
 pub use geometry::{
     EntryFace, FaceSide, PanelDimensionError, PanelGeometry, PanelGeometryError, PanelNominalSize, PanelRect,

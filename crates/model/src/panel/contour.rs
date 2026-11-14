@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::{
     BandingSpec, ContourSegmentId, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel,
-    PanelDimensionError, PanelNominalSize, RectCorner, RectEdge, RingBanding, VertexId,
+    PanelDimensionError, PanelNominalSize, PanelOutline, RectCorner, RectEdge, RingBanding, VertexId,
 };
 
 /// The ring of a contour panel as the nominal outline, with one source per segment.
@@ -604,78 +604,113 @@ impl Panel {
         &self,
         nominal_size: PanelNominalSize,
     ) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
-        if let Some(ring) = self.outline_contour() {
-            return ring_segments(ring, nominal_size);
+        match &self.outline {
+            PanelOutline::Contour { contour } => ring_segments(contour, nominal_size),
+            outline => outline_ring_with_sources(outline, nominal_size),
         }
-        let length = nominal_size.length().millimetres_f64();
-        let width = nominal_size.width().millimetres_f64();
-        let corners =
-            [DVec2::new(0.0, 0.0), DVec2::new(length, 0.0), DVec2::new(length, width), DVec2::new(0.0, width)];
-        let directions = [DVec2::X, DVec2::Y, DVec2::NEG_X, DVec2::NEG_Y];
-        let edge_lengths = [length, width, length, width];
-
-        let mut segments = Vec::with_capacity(8);
-        let mut sources = Vec::with_capacity(8);
-        for index in 0..4 {
-            let edge = RectEdge::ALL[index];
-            let edge_id = edge.id();
-            let start_corner = RectCorner::ALL[index];
-            let end_corner = RectCorner::ALL[(index + 1) % 4];
-            let direction = directions[index];
-            let start_setback = self
-                .corner_feature(start_corner.id())
-                .map(|feature| outgoing_setback(feature.feature()))
-                .unwrap_or(0.0);
-            let end_setback =
-                self.corner_feature(end_corner.id()).map(|feature| incoming_setback(feature.feature())).unwrap_or(0.0);
-            let clear = edge_lengths[index] - start_setback - end_setback;
-            if !clear.is_finite() || clear <= 1.0e-6 {
-                return Err(PanelContourError::FeatureOverlap { edge: edge_id });
-            }
-
-            let start = corners[index] + direction * start_setback;
-            let end = corners[(index + 1) % 4] - direction * end_setback;
-            let edge_segment = match self.edge_bow(edge_id) {
-                Some(bow) => {
-                    // The contour is counter-clockwise, so its left side is the material side.
-                    // A positive document sagitta bows outward, which is to the right of travel.
-                    let sagitta = -bow.sagitta().millimetres_f64();
-                    match Arc::from_endpoints_sagitta(start, end, sagitta) {
-                        Ok(arc) => Segment::Arc(arc),
-                        Err(ContourError::SagittaTooDeep) => {
-                            return Err(PanelContourError::BowTooDeep { edge: edge_id });
-                        }
-                        Err(error) => return Err(PanelContourError::Geometry(error)),
-                    }
-                }
-                None => Segment::Line(Line::new(start, end)?),
-            };
-            segments.push(edge_segment);
-            sources.push(SegmentSource::Edge(edge_id));
-
-            if let Some(feature) = self.corner_feature(end_corner.id()) {
-                segments.push(corner_segment(
-                    feature,
-                    end,
-                    corners[(index + 1) % 4],
-                    directions[index],
-                    directions[(index + 1) % 4],
-                )?);
-                sources.push(SegmentSource::Corner(end_corner.id()));
-            }
-        }
-
-        let contour = Contour::new(segments, true)?;
-        if contour.is_counter_clockwise() != Some(true) {
-            return Err(PanelContourError::FeatureGeometry);
-        }
-        Ok((contour, sources))
     }
+}
+
+impl PanelOutline {
+    /// The ring this outline draws at `nominal_size`, in panel-local millimetres, counter-clockwise.
+    ///
+    /// A stored ring converts to its own curves unchanged and is refused when its bounds are not
+    /// the size it was handed; a rectangle generates its edges, corner treatments and bows with the
+    /// same code the panel's geometry uses, so a caller sees exactly the shape the panel stores.
+    pub fn ring_for(&self, nominal_size: PanelNominalSize) -> Result<Contour, PanelContourError> {
+        self.ring_and_sources_for(nominal_size).map(|(ring, _)| ring)
+    }
+
+    /// The ring this outline draws, with the nominal source that produced each segment.
+    pub fn ring_and_sources_for(
+        &self,
+        nominal_size: PanelNominalSize,
+    ) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
+        match self {
+            Self::Contour { contour } => ring_segments(contour, nominal_size),
+            Self::Rect { .. } => outline_ring_with_sources(self, nominal_size),
+        }
+    }
+}
+
+/// The ring a rectangle outline draws at `nominal_size`, with one source per segment.
+///
+/// This is the generator the panel itself uses, exposed through [`PanelOutline::ring_for`] so a
+/// caller can ask what an outline would draw before a panel exists: the fill classifier compares
+/// its answer with the shape the walls leave, and the ghost draws the same shape the panel stores.
+/// A positive document sagitta bows outward, which is to the right of travel, so the geometry
+/// sagitta is its negation.
+fn outline_ring_with_sources(
+    outline: &PanelOutline,
+    nominal_size: PanelNominalSize,
+) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
+    let corner_feature = |corner: VertexId| outline.corner_features().iter().copied().find(|f| f.corner() == corner);
+    let edge_bow = |edge: EdgeId| outline.edge_bows().iter().copied().find(|bow| bow.edge() == edge);
+    let length = nominal_size.length().millimetres_f64();
+    let width = nominal_size.width().millimetres_f64();
+    let corners = [DVec2::new(0.0, 0.0), DVec2::new(length, 0.0), DVec2::new(length, width), DVec2::new(0.0, width)];
+    let directions = [DVec2::X, DVec2::Y, DVec2::NEG_X, DVec2::NEG_Y];
+    let edge_lengths = [length, width, length, width];
+
+    let mut segments = Vec::with_capacity(8);
+    let mut sources = Vec::with_capacity(8);
+    for index in 0..4 {
+        let edge = RectEdge::ALL[index];
+        let edge_id = edge.id();
+        let start_corner = RectCorner::ALL[index];
+        let end_corner = RectCorner::ALL[(index + 1) % 4];
+        let direction = directions[index];
+        let start_setback =
+            corner_feature(start_corner.id()).map(|feature| outgoing_setback(feature.feature())).unwrap_or(0.0);
+        let end_setback =
+            corner_feature(end_corner.id()).map(|feature| incoming_setback(feature.feature())).unwrap_or(0.0);
+        let clear = edge_lengths[index] - start_setback - end_setback;
+        if !clear.is_finite() || clear <= 1.0e-6 {
+            return Err(PanelContourError::FeatureOverlap { edge: edge_id });
+        }
+
+        let start = corners[index] + direction * start_setback;
+        let end = corners[(index + 1) % 4] - direction * end_setback;
+        let edge_segment = match edge_bow(edge_id) {
+            Some(bow) => {
+                // The contour is counter-clockwise, so its left side is the material side.
+                // A positive document sagitta bows outward, which is to the right of travel.
+                let sagitta = -bow.sagitta().millimetres_f64();
+                match Arc::from_endpoints_sagitta(start, end, sagitta) {
+                    Ok(arc) => Segment::Arc(arc),
+                    Err(ContourError::SagittaTooDeep) => {
+                        return Err(PanelContourError::BowTooDeep { edge: edge_id });
+                    }
+                    Err(error) => return Err(PanelContourError::Geometry(error)),
+                }
+            }
+            None => Segment::Line(Line::new(start, end)?),
+        };
+        segments.push(edge_segment);
+        sources.push(SegmentSource::Edge(edge_id));
+
+        if let Some(feature) = corner_feature(end_corner.id()) {
+            segments.push(corner_segment(
+                feature,
+                end,
+                corners[(index + 1) % 4],
+                directions[index],
+                directions[(index + 1) % 4],
+            )?);
+            sources.push(SegmentSource::Corner(end_corner.id()));
+        }
+    }
+
+    let contour = Contour::new(segments, true)?;
+    if contour.is_counter_clockwise() != Some(true) {
+        return Err(PanelContourError::FeatureGeometry);
+    }
+    Ok((contour, sources))
 }
 
 /// The ring segment that one nominal source produced.
 ///
-/// The generator emits one segment per source in travel order, so the source list and the ring
+/// The generator emits one segment per source in travel order in travel order, so the source list and the ring
 /// entries stay aligned; a source that is missing (a corner band with no treatment) has no segment.
 fn ring_source_id(
     contour: &crate::Contour,

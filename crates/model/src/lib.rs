@@ -68,7 +68,8 @@ pub use panel::{
     EdgeBanding, EdgeRef, EntryFace, FaceSide, MACHINING_DESCRIPTORS, Machining, MachiningAnchor,
     MachiningCapabilities, MachiningCategory, MachiningDescriptor, MachiningKind, MachiningParams, MachiningStage,
     Panel, PanelContourError, PanelDimensionError, PanelError, PanelGeometry, PanelGeometryError, PanelNominalSize,
-    PanelOutline, PanelRect, PanelRectError, RectCorner, RectEdge, RingBanding, SegmentSource,
+    PanelOutline, PanelRect, PanelRectError, RING_TOLERANCE_MM, RectCorner, RectEdge, RingBanding, SegmentSource,
+    classify_outline,
 };
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 pub use placement::{EulerAngles, PivotLocal, Placement, PlacementError};
