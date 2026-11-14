@@ -82,8 +82,9 @@ stale.
 and each stops at the first furniture object, part or envelope face. The free space is the
 intersection of the half-spaces behind the faces those rays met: a **convex cell** in the product's own
 frame. The measurement starts from the envelope's six planes, clips the cell by each met face's plane,
-probes again from the cell's own corners, and repeats until a round adds nothing (0106). Each face must
-still be a surface over its whole extent, which is what refuses a board that stops halfway.
+probes again from the cell's own corners, and repeats until a round adds nothing (0106). A met face
+bounds the void wherever it stands: it does not have to cover the whole face of the envelope, so a
+board that stops halfway and a top that stops before the front edge still leave a fillable void (0109).
 
 **The shape is the cell, not the box around it.** A product turned off the world axes is measured in
 its own frame, so it is measured like any other; a leaned back wall or a ceiling that comes down
@@ -95,9 +96,10 @@ whose posts stand at an angle answers the trapezoid, and a board in a case with 
 where the ceiling comes down instead of cutting into it.
 
 **A void that is not convex is refused, not approximated.** No other surface's true corner may lie
-strictly inside the cell: a void holding a post or a shelf would let a part cut into it. A notch, two
-boards meeting halfway, or a wall that stops before the face it would have to bound are refused the
-same way, with a sentence the tool shows rather than a part that does not fit. A curved boundary is
+strictly inside the cell: a void holding a post or a shelf would let a part cut into it. A notch or two
+boards meeting halfway is refused the same way, with a sentence the tool shows rather than a part that
+does not fit; a wall that merely stops halfway is not such a void, because its own face still bounds
+the space beside it. A curved boundary is
 measured by the box around its body, which encloses it — the part fits with a gap and never cuts in.
 Splitting a non-convex void into several cells is the next stage and is not planned yet. Arbitrary
 regions are not planned. Nothing in the document changes: the niche stays derived.
