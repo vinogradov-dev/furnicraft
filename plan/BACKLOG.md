@@ -109,7 +109,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
-- `[ ]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
+## Done
+
+- `[x]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
   Why: This is the point of the bevel: once a part takes the niche's shape, a shelf or a post
    in a niche bounded by boards turned in space must meet those boards with its end face in
    their plane, or it stands with a gap. Fit mode is safe but loose; Shape with a square end
@@ -136,9 +138,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    with no bevels, since the walls are vertical; the ghost's far rim equals the panel's; a
    click is one undo entry; `cargo xtask ci` is green. A new ADR records the reverse placement
    and the wedge refusal.
-  `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md`
-
-## Done
+  `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md` — `925d809`
 
 - `[x]` **N11** a panel's end can be given a bevel angle about its edge
   Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end

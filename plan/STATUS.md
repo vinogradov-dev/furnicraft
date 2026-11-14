@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=- state=idle base=49487f9 updated=2026-11-14
+STATE: milestone=M7 phase=T task=- state=idle base=925d809 updated=2026-11-14
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -56,7 +56,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-Nothing is scheduled: N12 is the next task to take, then K2, K3, K4 and R1.
+Nothing is scheduled: 4 open tasks wait in `## Next`.
 
 ## Index
 
