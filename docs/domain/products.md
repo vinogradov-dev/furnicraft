@@ -11,7 +11,8 @@ Related decisions: [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0097](../decisions/0097-a-product-is-a-container-with-an-authored-envelope.md),
 [0098](../decisions/0098-one-product-is-open-and-parts-are-born-inside-it.md),
 [0099](../decisions/0099-a-niche-is-the-space-a-frame-reserves.md),
-[0100](../decisions/0100-a-frame-is-created-opened-and-drawn.md).
+[0100](../decisions/0100-a-frame-is-created-opened-and-drawn.md),
+[0106](../decisions/0106-a-niche-is-a-convex-cell-of-wall-planes.md).
 
 ## 1. The entity
 
@@ -77,20 +78,29 @@ product, bounded by the envelope's virtual faces and by the parts or other produ
 id, no node, no command, no field; like content bounds, it is computed when asked, so it cannot go
 stale.
 
-**It is measured by probes.** From the point, six rays are cast — right, left, up, down, forward,
-back — and each stops at the first furniture object or at the envelope. The four side rays bound the
-**section**, the polygon of free space in the product's own horizontal plane; the two vertical rays
-give the void's floor and ceiling. A rectangular case answers that section as a box; a shelf takes the
-polygon as its outline. The post tool takes the box, whose height and depth sides it spans.
+**It is measured by probes.** From the point, rays are cast along the product's own axes and corners,
+and each stops at the first furniture object, part or envelope face. The free space is the
+intersection of the half-spaces behind the faces those rays met: a **convex cell** in the product's own
+frame. The measurement starts from the envelope's six planes, clips the cell by each met face's plane,
+probes again from the cell's own corners, and repeats until a round adds nothing (0106). Each face must
+still be a surface over its whole extent, which is what refuses a board that stops halfway.
 
-**The shape is a staged promise.** The probes report *faces*, not only lengths, so the section is built
-from the wall planes and not from the distances: the first non-rectangular case is a piece whose posts
-stand at an angle, where the plan section is a trapezoid. A shelf's outline lies in the product's own
-horizontal plane, so that plane is the one the section is measured in. The section is accepted only
-when it is one straight extruded shape: a wall that stops halfway, or a free space with a notch, gives
-no usable outline and the tool refuses it with a sentence rather than approximating it. A post spans
-the depth as a flat board, so a splayed section offers no post and the tool refuses that too.
-Arbitrary regions are not planned. Nothing in the document changes: the niche stays derived.
+**The shape is the cell, not the box around it.** A product turned off the world axes is measured in
+its own frame, so it is measured like any other; a leaned back wall or a ceiling that comes down
+towards the back bounds the cell exactly, wherever the cursor happens to stand. The cell answers its
+**supporting planes** (a unit normal pointing into the void and an offset), its **corners**, and the
+**polygon a board of a given thickness takes**: a shelf asks for the cell cut at its own slab, a post
+for the same cut seen in its own board plane. A rectangular case answers a plain rectangle, a case
+whose posts stand at an angle answers the trapezoid, and a board in a case with a sloped ceiling stops
+where the ceiling comes down instead of cutting into it.
+
+**A void that is not convex is refused, not approximated.** No other surface's true corner may lie
+strictly inside the cell: a void holding a post or a shelf would let a part cut into it. A notch, two
+boards meeting halfway, or a wall that stops before the face it would have to bound are refused the
+same way, with a sentence the tool shows rather than a part that does not fit. A curved boundary is
+measured by the box around its body, which encloses it — the part fits with a gap and never cuts in.
+Splitting a non-convex void into several cells is the next stage and is not planned yet. Arbitrary
+regions are not planned. Nothing in the document changes: the niche stays derived.
 
 **A probe stops at the first surface of a furniture entity and never passes through it** (0102): a
 panel face, a hardware body or another product's shell. A piece standing inside another's reserved
@@ -98,10 +108,12 @@ space therefore reduces the niche of the outer piece exactly as a panel would, w
 niche "bounded by the envelope and by panels and other furniture products" true in the program and not
 only in the sentence.
 
-**A niche answers with three things:** its **size** (width, height, depth), its **world position** —
-the corner the box is anchored at — and its **shape** (a box, or the section polygon extruded along
-the height). A tool never re-derives a position from a cursor point and a size; that is where
-rounding drift appears. The answer is a model query (0103), so the fill tool, the distance indicator
+**A niche answers with its cell and its box.** The **size** (width, height, depth) is the box around
+the cell, which is what the callouts print; the **world position** is that box's corner, so a tool
+never re-derives a position from a cursor point and a size; the **shape** says whether the box is the
+free space, whether one section describes it from floor to ceiling, or whether the section changes
+along the height; and the cell itself — its planes, its corners and the cut a board takes — is what a
+part is measured against. The answer is a model query (0103), so the fill tool, the distance indicator
 and the move tool all consume the same one.
 
 **It is shown, not stored.** Hovering a void with a fill tool draws the niche: a wireframe box on its
@@ -156,16 +168,18 @@ allowed; the lock is about adding work, not about owning the object.
 The maker's flow: open a product, choose “add a post” or “add a shelf”, point at the empty space.
 
 - The cursor ray meets the envelope's interior; the point defines the niche (§4).
-- A **post** takes the niche's height and depth; a **shelf** takes its width and depth. Which axis pair
-  a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`, `None`). A shelf in a
-  splayed case takes the section polygon as a contour-panel outline; a post needs a rectangular
-  section, because it is a flat board across the depth.
+- A **post** takes the niche's height and the depth the void leaves it; a **shelf** takes its width and
+  depth. Which axis pair a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`,
+  `None`). Each takes the cell's own cut at the board's thickness, so a shelf in a splayed case is a
+  contour panel with the trapezoid as its outline, and a post stands against a splayed wall with the
+  depth the slab really has (0106).
 - A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
   is written until the click.
 - The offset step is **1 mm**; there are no fractional sizes.
 - A click creates the part with exactly the ghost's size, through one command and one undo entry.
-- The two fills handle axis-aligned products; a shelf also takes the shaped section of §4. A drawer, a
-  back panel and a facade need their own fill rules.
+- The two fills handle a product in any orientation, because the cell is measured in the product's own
+  frame; a curved boundary is measured by the box around its body, so the part fits with a gap. A
+  drawer, a back panel and a facade need their own fill rules.
 
 **Exact distances.** While a fill, a box creation or a move runs, the viewport shows one distance field
 per direction of the work plane — from the new face to the first surface — and exactly one of them is

@@ -566,7 +566,9 @@ fn a_drag_on_a_frame_corner_resizes_the_envelope_in_one_undo_step() {
 
 #[test]
 fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step() {
-    let mut harness = Harness::new("frame-fill");
+    // An empty scene: the sample session's loose parts stand inside a frame created at the
+    // origin, and a void holding a part is refused by the niche (ADR 0106).
+    let mut harness = Harness::with_session("frame-fill", crate::scene_build::empty_session().expect("empty"));
     harness.settle();
     harness.app.product_card.start();
     harness.settle();
@@ -627,7 +629,9 @@ fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step()
 fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
     // Two posts stand at an angle, so the free section is a trapezoid: the ghost draws the polygon
     // and the click stores exactly that ring, not the rectangle around it (ADR 0099).
-    let mut harness = Harness::new("frame-fill-shaped");
+    // An empty scene: the sample session's loose parts stand inside a frame created at the
+    // origin, and a void holding a part is refused by the niche (ADR 0106).
+    let mut harness = Harness::with_session("frame-fill-shaped", crate::scene_build::empty_session().expect("empty"));
     harness.settle();
     harness.app.product_card.start();
     harness.settle();
@@ -696,7 +700,9 @@ fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
 
 #[test]
 fn a_typed_distance_places_the_fill_exactly_and_the_click_creates_it() {
-    let mut harness = Harness::new("frame-fill-typed");
+    // An empty scene: the sample session's loose parts stand inside a frame created at the
+    // origin, and a void holding a part is refused by the niche (ADR 0106).
+    let mut harness = Harness::with_session("frame-fill-typed", crate::scene_build::empty_session().expect("empty"));
     harness.settle();
     harness.app.product_card.start();
     harness.settle();

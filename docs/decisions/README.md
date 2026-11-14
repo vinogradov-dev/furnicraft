@@ -111,6 +111,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0104](0104-a-ghost-of-a-missing-node-is-shell-paint.md) | A ghost of a missing node is shell paint, not the overlay | Accepted; narrows 0093 |
 | [0104](0104-supply-names-four-sources.md) | Supply names four sources, and a product is assembled | Accepted; amends the trait list of 0094 |
 | [0105](0105-a-panel-stance-is-the-flat-frame-turned.md) | A panel stance is the flat frame turned, never mirrored | Accepted |
+| [0106](0106-a-niche-is-a-convex-cell-of-wall-planes.md) | A niche is a convex cell of wall planes | Accepted; refines 0099 and 0103 |
 
 ## Format
 
