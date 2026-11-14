@@ -518,6 +518,17 @@ fn local_ring(footprint: &[DVec2], angles: &[Option<Degrees>], stance: &Stance, 
         points = (0..count).filter_map(|index| points.get((count - index) % count).copied()).collect();
         bevels = (0..count).filter_map(|index| bevels.get((count - 1 - index) % count).copied()).collect();
     }
+    // Vertex 1 is the panel's zero corner (ADR 0105). The section comes back from the niche in its
+    // own angular order, which starts at whichever corner the cut listed first; on a board turned
+    // about its length axis that is the corner at the far end, so the first corner looked as if the
+    // panel had been turned half a turn. Rotate the ring and its bevels together until the zero
+    // corner leads, keeping the counter-clockwise travel.
+    let start = points.iter().position(|point| point.x.abs() <= 1.0e-9 && point.y.abs() <= 1.0e-9).unwrap_or(0);
+    if start != 0 {
+        let count = points.len();
+        points = (0..count).filter_map(|index| points.get((index + start) % count).copied()).collect();
+        bevels = (0..count).filter_map(|index| bevels.get((index + start) % count).copied()).collect();
+    }
     LocalRing { points, bevels }
 }
 
@@ -978,6 +989,23 @@ mod tests {
         let distance = far_edge_distance(&shaped, bevel, normal, normal.dot(DVec3::new(0.0, 400.0, 0.0)), thickness);
         assert!(distance <= 1.0e-3, "the far edge lies in the wall's plane, off by {distance} mm");
         assert!(inside(&shaped, thickness), "and the whole board stays in the void");
+    }
+
+    #[test]
+    fn a_turned_shape_starts_its_ring_at_the_panels_zero_corner() {
+        // A wall that makes face A the wide one turns the board half a turn about its length axis
+        // (ADR 0108). The section comes back from the niche in its own angular order, so without
+        // the ring's turn the first corner sat at the far end and the panel looked turned half a
+        // turn more than it is. Vertex 1 is the panel's zero corner (ADR 0105).
+        let (mut project, product) = empty_product(600, 560, 720);
+        leaned_wall(&mut project, product, 400.0, -10.0);
+        let shaped =
+            plan(&project, product, Fill::WidthAndDepth, FillMode::Shape, millimetres(18)).expect("a shaped shelf");
+        assert!(shaped.placement.transform_vector(DVec3::Y).y < 0.0, "the board is turned: {:?}", shaped.placement);
+        let ring = shaped.outline.contour().expect("a beveled board is a contour");
+        let first = ring.segments().next().and_then(|segment| segment.start().ok()).expect("a first corner");
+        assert_eq!(first, [Length::ZERO, Length::ZERO], "vertex 1 is the panel's zero corner");
+        assert_eq!(shaped.corners.first(), Some(&DVec2::ZERO), "the ghost starts at the same corner");
     }
 
     #[test]
