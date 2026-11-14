@@ -120,22 +120,23 @@ impl Method {
 ///
 /// A fill cell draws as one split cell rather than two cells a maker has to tell apart: the method
 /// list is the choice between fitting and taking the shape, and the pinned method is the one the
-/// cell runs (U74). The shelf's list is the same choice over its own class.
+/// cell runs (U74, ADR 0110). The section caption says the rows are two builds of one panel, not
+/// two panels, and each row carries its own glyph so the shape is not a blank line.
 const FILL_POST_SHAPE: &[VariantSpec] = &[VariantSpec {
     id: "furniture.panels.post.shape",
     label: Message::FillMethodShape,
-    icon: None,
+    icon: Some(icons::contour::POLYGON),
     run: Some(ToolKind::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
-    section: None,
+    section: Some(Message::SectionFillMethod),
 }];
 
 /// The shelf's second method: take the whole section instead of the largest fit.
 const FILL_SHELF_SHAPE: &[VariantSpec] = &[VariantSpec {
     id: "furniture.panels.shelf.shape",
     label: Message::FillMethodShape,
-    icon: None,
+    icon: Some(icons::contour::POLYGON),
     run: Some(ToolKind::Fill { class: ClassCode::HORIZONTAL_PANEL, mode: FillMode::Shape }),
-    section: None,
+    section: Some(Message::SectionFillMethod),
 }];
 
 /// One tool: one cell of a group's row.

@@ -406,6 +406,11 @@ fn the_box_tool_gesture_is_painted_offscreen() {
     );
     let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
         .expect("the application builds");
+    // The fill cells live on the Furniture tab, and the picture must show the armed cell, not the
+    // tab a fresh workspace happens to open.
+    if let Some(tab) = furnicraft_ui::toolbars::spec::tab("furniture") {
+        app.tabs.active_mut().editor.set_ribbon_tab(tab);
+    }
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
     let _ = settle(&mut app, &ctx, &render_state, screen);
 
@@ -502,6 +507,11 @@ fn the_box_grips_are_painted_offscreen() {
     );
     let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
         .expect("the application builds");
+    // The fill cells live on the Furniture tab, and the picture must show the armed cell, not the
+    // tab a fresh workspace happens to open.
+    if let Some(tab) = furnicraft_ui::toolbars::spec::tab("furniture") {
+        app.tabs.active_mut().editor.set_ribbon_tab(tab);
+    }
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
     let _ = settle(&mut app, &ctx, &render_state, screen);
     {
@@ -583,6 +593,11 @@ fn the_frame_grips_are_painted_offscreen() {
     let session = crate::scene_build::empty_session().expect("an empty session");
     let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
         .expect("the application builds");
+    // The fill cells live on the Furniture tab, and the picture must show the armed cell, not the
+    // tab a fresh workspace happens to open.
+    if let Some(tab) = furnicraft_ui::toolbars::spec::tab("furniture") {
+        app.tabs.active_mut().editor.set_ribbon_tab(tab);
+    }
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
     let _ = settle(&mut app, &ctx, &render_state, screen);
     {
@@ -662,6 +677,28 @@ fn the_frame_grips_are_painted_offscreen() {
     println!("the frame grips are in {}", path.display());
 }
 
+/// A root and one empty product of `600 x 560 x 720` millimetres, the void a fill needs.
+///
+/// The sample project carries a shelf and a drawer at the origin, which stand inside a product
+/// created there; the fill rightly refuses a void holding them, so the shot uses a product of its
+/// own instead of the shared sample.
+fn empty_product() -> (furnicraft_model::Project, furnicraft_model::Id) {
+    use furnicraft_model::{ClassCode, Container, Envelope, Id, Placement, Project};
+
+    let root = Container::new(Id::new(1).expect("an id"), "Root", Placement::IDENTITY, Vec::new());
+    let mut project = Project::new(root).expect("an empty project");
+    let envelope = Envelope::new(
+        furnicraft_testkit::millimetres(600),
+        furnicraft_testkit::millimetres(560),
+        furnicraft_testkit::millimetres(720),
+    )
+    .expect("a valid box");
+    let product = project
+        .add_product(project.root().id(), "Cabinet", ClassCode::GENERAL_PRODUCT, envelope, Placement::IDENTITY)
+        .expect("a product");
+    (project, product)
+}
+
 /// Draws the empty-space tool's ghost into one picture, so its accent and callouts can be looked at.
 ///
 /// The matrix above varies the window's look; this shot varies the tool. It arms the shelf fill
@@ -679,11 +716,16 @@ fn the_empty_space_ghost_is_painted_offscreen() {
     };
     let ctx = egui::Context::default();
     let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("fill-workspace.json");
-    let (project, product) = furnicraft_testkit::sample_product_project();
+    let (project, product) = empty_product();
     let mut session = furnicraft_engine::Session::with_catalog(project, furnicraft_testkit::sample_catalog());
     assert!(session.open_product(product), "the fixture product opens");
     let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
         .expect("the application builds");
+    // The fill cells live on the Furniture tab, and the picture must show the armed cell, not the
+    // tab a fresh workspace happens to open.
+    if let Some(tab) = furnicraft_ui::toolbars::spec::tab("furniture") {
+        app.tabs.active_mut().editor.set_ribbon_tab(tab);
+    }
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
     let _ = settle(&mut app, &ctx, &render_state, screen);
 
@@ -694,7 +736,7 @@ fn the_empty_space_ghost_is_painted_offscreen() {
             .arm_fill(
                 &document.session,
                 furnicraft_model::ClassCode::HORIZONTAL_PANEL,
-                furnicraft_model::FillMode::Fit,
+                furnicraft_model::FillMode::Shape,
                 furnicraft_text::Lang::En,
             )
             .expect("the shelf fill arms inside the open product");

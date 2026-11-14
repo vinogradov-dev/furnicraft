@@ -582,7 +582,10 @@ fn show_tool(
     }
     let rows = method_rows(tool, state, context, lang);
     let pinned = state.pinned_index(tool);
-    let Some(face) = main_face(tool, &rows, pinned) else {
+    // The armed method is what the cell shows: picking a mode from the list must change the face
+    // and the pressed state, not just the ghost, or the choice looks like it did not take (ADR 0110).
+    let shown = rows.iter().position(|row| row.armed).unwrap_or(pinned);
+    let Some(face) = main_face(tool, &rows, shown) else {
         return;
     };
     let caret_hint = Message::ToolMethods.text(lang);
@@ -623,16 +626,18 @@ struct MainFace {
     action: Option<ToolAction>,
 }
 
-/// The main face of a split cell: the row of the pinned method, read as one cell.
-fn main_face(tool: &'static ToolSpec, rows: &[list::Row], pinned: usize) -> Option<MainFace> {
-    let row = rows.get(pinned)?;
-    Some(MainFace {
-        icon: row.method.icon.or(tool.icon)?,
-        hint: row.hint.clone(),
-        enabled: row.enabled,
-        armed: row.armed,
-        action: row.action,
-    })
+/// The main face of a split cell: the row of the pinned or armed method, read as one cell.
+///
+/// A fill cell always draws the tool's own glyph: the two rows are two builds of one panel, and the
+/// cell must keep saying «Post» or «Shelf» as the mode changes (ADR 0110). Any other method draws
+/// its own artwork, falling back to the tool's when it shares it.
+fn main_face(tool: &'static ToolSpec, rows: &[list::Row], index: usize) -> Option<MainFace> {
+    let row = rows.get(index)?;
+    let icon = match row.method.run {
+        Some(ToolKind::Fill { .. }) => tool.icon?,
+        _ => row.method.icon.or(tool.icon)?,
+    };
+    Some(MainFace { icon, hint: row.hint.clone(), enabled: row.enabled, armed: row.armed, action: row.action })
 }
 /// The rows of one tool's list: every method the map declares, in order, planned ones included.
 ///
@@ -647,7 +652,7 @@ fn method_rows(tool: &'static ToolSpec, state: &Toolbars, context: RibbonContext
                 None => method.label.text(lang).to_owned(),
                 // A method that cannot run here says what is missing.
                 Some(ready) if !ready.enabled => ready.hint.clone(),
-                // A fill's own hint names the tool and then the method — «Post: Largest fit» —
+                // A fill's own hint names the tool and then the method — «Post: Largest rectangle» —
                 // because the two fills are two cells whose methods would otherwise read the same.
                 Some(ready) if matches!(method.run, Some(ToolKind::Fill { .. })) => ready.hint.clone(),
                 // Every other tool names the method alone: the glyph already says which tool it is.
@@ -869,7 +874,7 @@ mod tests {
                     "Sphere: click the work plane",
                 ],
             ),
-            ("furniture", &["Panel", "Post: Largest fit", "Product frame", "Shelf: Largest fit"]),
+            ("furniture", &["Panel", "Post: Largest rectangle", "Product frame", "Shelf: Largest rectangle"]),
             ("scene", &["Assembly", "Camera", "Light"]),
             ("view", &["Frame all  (F)", "Grid snap  (G)", "Switch the projection  (O)"]),
         ];
@@ -1529,7 +1534,7 @@ mod tests {
             "an unpinned cell fits the void"
         );
         assert!(
-            labels.iter().any(|label| label == "Post: Largest fit"),
+            labels.iter().any(|label| label == "Post: Largest rectangle"),
             "the hint names the tool and the mode: {labels:?}"
         );
 
@@ -1540,7 +1545,74 @@ mod tests {
             vec![ToolAction::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }],
             "the pinned method runs, and the click still arms nothing by itself"
         );
-        assert!(labels.iter().any(|label| label == "Post: Whole shape"), "the face follows the pin: {labels:?}");
+        assert!(labels.iter().any(|label| label == "Post: Niche shape"), "the face follows the pin: {labels:?}");
+    }
+
+    #[test]
+    fn the_fill_methods_read_as_two_builds_of_one_panel() {
+        // The Shape row used to be a blank line named like a second panel. It now carries its own
+        // glyph and sits under a caption that says both rows are builds of the same cell (ADR 0110).
+        for id in ["furniture.panels.post", "furniture.panels.shelf"] {
+            let tool = tool(id);
+            let methods = tool.methods().collect::<Vec<_>>();
+            assert_eq!(methods.len(), 2, "{id} has one cell with two builds");
+            assert!(methods[1].icon.is_some_and(Icon::is_drawn), "{id}'s shape row has artwork");
+            assert_eq!(methods[0].section, Some(Message::SectionFillMethod), "{id} captions its build");
+            assert_eq!(methods[1].section, Some(Message::SectionFillMethod));
+        }
+    }
+
+    #[test]
+    fn the_open_fill_list_draws_the_build_caption_and_both_rows() {
+        let post = tool("furniture.panels.post");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("furniture"));
+        assert!(state.open_list(post));
+        let (texts, _, _) = draw_frames(&mut state, full_context(), 3);
+        assert!(texts.iter().any(|text| text == "BUILD METHOD"), "the caption says what the rows are: {texts:?}");
+        assert!(texts.iter().any(|text| text == "Largest rectangle"), "the fit row is drawn: {texts:?}");
+        assert!(texts.iter().any(|text| text == "Niche shape"), "the shape row is drawn: {texts:?}");
+    }
+
+    #[test]
+    fn the_fill_cell_shows_the_armed_mode_even_when_another_is_pinned() {
+        // Picking Shape from the list arms it; the cell must then show Shape pressed, instead of
+        // going on showing the pinned Fit and making the choice look like it did not take (ADR 0110).
+        let post = tool("furniture.panels.post");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("furniture"));
+        let context = RibbonContext {
+            active: Some(ToolActivity::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
+            ..full_context()
+        };
+        let rows = method_rows(post, &state, context, Lang::En);
+        assert!(!rows[0].armed, "the pinned Fit is not what the viewport will build");
+        assert!(rows[1].armed, "the shape is armed");
+        let shown = rows.iter().position(|row| row.armed).unwrap_or(state.pinned_index(post));
+        let face = main_face(post, &rows, shown).expect("a face");
+        assert!(face.armed, "the cell draws pressed");
+        assert_eq!(face.icon, icons::scene::POST, "the cell keeps the panel kind's glyph");
+        assert_eq!(face.hint, "Post: Niche shape", "the face names the mode the click will use");
+        assert_eq!(
+            face.action,
+            Some(ToolAction::Fill { class: ClassCode::VERTICAL_PANEL, mode: FillMode::Shape }),
+            "a second click on the armed mode drops it"
+        );
+        assert_eq!(
+            state.pinned_index(post),
+            0,
+            "showing the armed mode does not silently change the workspace default"
+        );
+    }
+
+    #[test]
+    fn a_fill_face_keeps_the_tool_glyph_in_both_modes() {
+        let post = tool("furniture.panels.post");
+        let rows = method_rows(post, &Toolbars::new(), full_context(), Lang::En);
+        for index in 0..rows.len() {
+            let face = main_face(post, &rows, index).expect("a face");
+            assert_eq!(face.icon, icons::scene::POST, "row {index} draws the post, not a mode glyph");
+        }
     }
 
     #[test]

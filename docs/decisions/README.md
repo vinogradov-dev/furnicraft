@@ -115,6 +115,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0107](0107-an-end-bevel-is-an-angle-about-its-edge.md) | An end bevel is an angle about its outline edge | Accepted |
 | [0108](0108-a-shaped-fill-bevels-its-ends-onto-the-walls.md) | A shaped fill bevels its ends onto the walls, and turns the board when it must | Accepted; refines 0105 and 0107 |
 | [0109](0109-a-niche-is-bounded-by-the-faces-the-pointer-sees.md) | A niche is bounded by the faces the pointer sees | Accepted; supersedes the coverage clause of 0106 |
+| [0110](0110-one-fill-cell-and-its-build-method.md) | One fill cell, and its build method in the cell's own list | Accepted; refines 0106 and the ribbon list of U74 |
 
 ## Format
 
