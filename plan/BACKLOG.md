@@ -41,24 +41,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 ## Bugs
-- `[ ]` **X37** an open method list owns the pointer only across part of its own rectangle
-  Why: Observation: with a drawing tool armed, the pointer over an open method list keeps the
-   list's cursor across a row's glyph and name, but the tool cursor comes back over the
-   right-hand part of the row, where the key label and the pin sit, although the whole 298 pt
-   popup is the list. Expected: the popup owns the pointer across its whole width and height —
-   header, rows, key column and pin — and the tool cursor belongs to the viewport, never to a
-   surface drawn over it. Suspected cause: nothing claims the cursor for the popup's own
-   rectangle, so the cursor over it is decided by whichever surface wrote last, and the key
-   label and the reserved pin column fall back to what the viewport wrote for the frame.
-  Shape: One place decides the cursor for the frame: the list claims its own cursor while the
-   pointer is inside the popup rectangle (one rectangle, read from the popup's response, not
-   per row), and the viewport reads the chrome before it writes a tool cursor. A headless test
-   drives `RawInput` with the pointer at four positions across the open list — the header, the
-   name, the key and the pin — asserts one cursor for all four, and asserts the armed tool's
-   cursor returns on the frame the list closes.
-  Done: The whole open list shows one cursor and the frame after it closes shows the tool's;
-   the test fails before the change and passes after; `cargo xtask ci` is green.
-  `files: crates/ui/src/toolbars/list.rs, apps/furnicraft/src/document.rs`
 - `[ ]` **X38** inside an open product a click selects the whole product instead of the part under the pointer
   Why: Observation: with a product opened by a double click, every click in the viewport
    selects the product, while the tree selects and highlights the part under the pointer; an
@@ -357,6 +339,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/ui/src/object_card.rs, crates/ui/src/editor/cards.rs, crates/ui/src/theme.rs`
 
 ## Done
+
+- `[x]` **X37** an open method list owns the pointer only across part of its own rectangle
+  Why: Observation: with a drawing tool armed, the pointer over an open method list keeps the
+   list's cursor across a row's glyph and name, but the tool cursor comes back over the
+   right-hand part of the row, where the key label and the pin sit, although the whole 298 pt
+   popup is the list. Expected: the popup owns the pointer across its whole width and height —
+   header, rows, key column and pin — and the tool cursor belongs to the viewport, never to a
+   surface drawn over it. Suspected cause: nothing claims the cursor for the popup's own
+   rectangle, so the cursor over it is decided by whichever surface wrote last, and the key
+   label and the reserved pin column fall back to what the viewport wrote for the frame.
+  Shape: One place decides the cursor for the frame: the list claims its own cursor while the
+   pointer is inside the popup rectangle (one rectangle, read from the popup's response, not
+   per row), and the viewport reads the chrome before it writes a tool cursor. A headless test
+   drives `RawInput` with the pointer at four positions across the open list — the header, the
+   name, the key and the pin — asserts one cursor for all four, and asserts the armed tool's
+   cursor returns on the frame the list closes.
+  Done: The whole open list shows one cursor and the frame after it closes shows the tool's;
+   the test fails before the change and passes after; `cargo xtask ci` is green.
+  `files: crates/ui/src/toolbars/list.rs, apps/furnicraft/src/document.rs` — `caf5f08`
 
 - `[x]` **X36** a split ribbon cell squeezes its main face to 24 pt, so the glyph reads as cut off
   Why: Observation: a cell is `RIBBON_CELL_WIDTH` (34) x `RIBBON_ROW_HEIGHT` (30), and a tool
