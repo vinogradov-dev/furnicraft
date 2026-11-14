@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=- state=idle base=a801050 updated=2026-11-14
+STATE: milestone=M7 phase=T task=- state=idle base=2fad7f3 updated=2026-11-14
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -56,7 +56,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-Nothing is scheduled: the UX pass (U83–U93, X36–X39) leads `## Next`.
+Nothing is scheduled: U84 leads the rest of the UX pass, with X36–X39 in `## Bugs`.
 
 ## Index
 

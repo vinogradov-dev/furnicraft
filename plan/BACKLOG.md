@@ -179,25 +179,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
-- `[ ]` **U83** the program's own guides get one ink and one stroke: the helper ink
-  why: The corner brackets of an open level (U89) and the viewport's own cursor (U88) are the
-   first things FurniCraft draws to help rather than to show the furniture, and the owner asked
-   for the colour and thickness rule before more helper geometry arrives. A guide whose colour
-   is a literal in a feature module is the defect `cargo xtask ui-rules` exists to stop (ADR
-   0063, 0089), and a guide that disappears into the light theme is worse than no guide.
-  Shape: `theme::helper()` returns the ink — a warm amber, mixed from the palette so it keeps
-   its contrast in both variants of all three presets — and `theme::HELPER_STROKE` the rest
-   width; a test pins the contrast against `surface`, `panel` and the viewport background
-   (`scene::SceneColors`) at 3:1 or better and asserts the ink is never the accent, the danger
-   colour or the selection colour. `scene::SceneColors` carries the same ink for a guide the
-   frame draws, resolved once per frame the way the shell resolves it today. The widths are one
-   rule: 1 pt for a full-viewport crosshair, 1.5 pt for a bracket at rest, 2 pt for the bracket
-   that marks the open level. ADR 0111 records the ink, the widths and the rule that a guide is
-   screen space and never document data.
-  Done: The ink and the widths exist in `theme.rs`, the contrast test passes in both variants
-   of all three presets, ADR 0111 is written and listed in `docs/decisions/README.md`, `cargo
-   xtask ui-rules` and `cargo xtask plan` are green, and `plan/map.md` names the ink's home.
-  `files: crates/ui/src/theme.rs, crates/scene/src/lib.rs, docs/decisions`
 - `[ ]` **U84** the method list is one flat list of names: the section captions go
   Why: The owner asked for the captions to go: a «Build» or «Tangents» heading over one or two
    rows is a second line to read, it makes a small menu look like a form, and the row's own
@@ -393,6 +374,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/ui/src/object_card.rs, crates/ui/src/editor/cards.rs, crates/ui/src/theme.rs`
 
 ## Done
+
+- `[x]` **U83** the program's own guides get one ink and one stroke: the helper ink
+  why: The corner brackets of an open level (U89) and the viewport's own cursor (U88) are the
+   first things FurniCraft draws to help rather than to show the furniture, and the owner asked
+   for the colour and thickness rule before more helper geometry arrives. A guide whose colour
+   is a literal in a feature module is the defect `cargo xtask ui-rules` exists to stop (ADR
+   0063, 0089), and a guide that disappears into the light theme is worse than no guide.
+  Shape: `theme::helper()` returns the ink — a warm amber, mixed from the palette so it keeps
+   its contrast in both variants of all three presets — and `theme::HELPER_STROKE` the rest
+   width; a test pins the contrast against `surface`, `panel` and the viewport background
+   (`scene::SceneColors`) at 3:1 or better and asserts the ink is never the accent, the danger
+   colour or the selection colour. `scene::SceneColors` carries the same ink for a guide the
+   frame draws, resolved once per frame the way the shell resolves it today. The widths are one
+   rule: 1 pt for a full-viewport crosshair, 1.5 pt for a bracket at rest, 2 pt for the bracket
+   that marks the open level. ADR 0111 records the ink, the widths and the rule that a guide is
+   screen space and never document data.
+  Done: The ink and the widths exist in `theme.rs`, the contrast test passes in both variants
+   of all three presets, ADR 0111 is written and listed in `docs/decisions/README.md`, `cargo
+   xtask ui-rules` and `cargo xtask plan` are green, and `plan/map.md` names the ink's home.
+  `files: crates/ui/src/theme.rs, crates/scene/src/lib.rs, docs/decisions` — `2fad7f3`
 
 - `[x]` **N16** a changed bevel angle rebuilds the panel body
   Why: The mesh cache's panel inputs compared the outline, size, machining and banding but not
